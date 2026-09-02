@@ -14,7 +14,7 @@ import functools
 from qdrant_client import QdrantClient, models
 
 from agents.config import (
-    DENSE_MODEL, KB_COLLECTION, KB_DIR, KB_MIN_SCORE, QDRANT_URL, ROOT, SPARSE_MODEL,
+    DENSE_MODEL, KB_COLLECTION, KB_DIR, KB_MIN_DENSE_SCORE, QDRANT_URL, ROOT, SPARSE_MODEL,
 )
 from agents.kb.chunker import chunk_dir, normalize
 
@@ -81,10 +81,26 @@ def _filter(**equals) -> models.Filter | None:
     return models.Filter(must=conditions) if conditions else None
 
 
-def search(query: str, *, limit: int = 5, min_score: float = KB_MIN_SCORE, **equals) -> list[dict]:
-    """Гібридний пошук з fail-closed відсіванням: порожній список = 'у базі немає'."""
+def _best_dense_score(query: str, query_filter: models.Filter | None) -> float:
+    """Максимальний косинус по dense-гілці — єдиний сигнал з абсолютною шкалою."""
+    response = client().query_points(
+        collection_name=KB_COLLECTION,
+        query=models.Document(text=query, model=DENSE_MODEL),
+        using=DENSE, limit=1, query_filter=query_filter, with_payload=False,
+    )
+    return response.points[0].score if response.points else 0.0
+
+
+def search(query: str, *, limit: int = 5, min_score: float = KB_MIN_DENSE_SCORE, **equals) -> list[dict]:
+    """Гібридний пошук з fail-closed відсіванням: порожній список = 'у базі немає'.
+
+    Ранжує RRF (він точніший), а відсікає dense-косинус (у нього є шкала). Це два
+    різні питання: "що релевантніше" і "чи є тут узагалі відповідь".
+    """
     query = normalize(query)
     query_filter = _filter(**equals)
+    if _best_dense_score(query, query_filter) < min_score:
+        return []
     response = client().query_points(
         collection_name=KB_COLLECTION,
         prefetch=[
@@ -98,10 +114,7 @@ def search(query: str, *, limit: int = 5, min_score: float = KB_MIN_SCORE, **equ
         limit=limit,
         with_payload=True,
     )
-    return [
-        {**point.payload, "score": round(point.score, 4)}
-        for point in response.points if point.score >= min_score
-    ]
+    return [{**point.payload, "score": round(point.score, 4)} for point in response.points]
 
 
 if __name__ == "__main__":

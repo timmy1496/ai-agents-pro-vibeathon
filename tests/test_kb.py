@@ -100,16 +100,27 @@ def test_runbook_lookup_needs_type_filter(indexed, query, expected_source):
 
 
 def test_filter_by_type_and_service(indexed):
-    hits = indexed.search("памʼять рестарти", limit=5, type="postmortem")
+    hits = indexed.search("рестарти через нестачу памʼяті", limit=5, type="postmortem")
     assert hits and all(h["type"] == "postmortem" for h in hits)
 
-    hits = indexed.search("деплой", limit=5, service="checkout-api")
+    hits = indexed.search("що зламалось після деплою", limit=5, service="checkout-api")
     assert hits and all(h["service"] == "checkout-api" for h in hits)
 
 
-def test_fail_closed_on_irrelevant_query(indexed):
-    """Порожньо краще за вигадку: висока планка відсіює шум."""
-    assert indexed.search("рецепт борщу з пампушками", limit=3, min_score=0.9) == []
+@pytest.mark.parametrize("query", ["яка погода завтра в Києві", "хто виграв чемпіонат світу"])
+def test_obviously_off_topic_is_cut_by_threshold(indexed, query):
+    """Поріг ловить лише очевидно стороннє — це весь обсяг його обіцянки."""
+    assert indexed.search(query, limit=3) == []
+
+
+def test_threshold_alone_does_not_separate_in_from_out(indexed):
+    """Фіксуємо реальну межу механізму: сторонній запит може пройти поріг.
+
+    Саме тому fail-closed тримається на grade-кроці в промпті A1, а не на числі.
+    Якщо цей тест колись впаде — щілина з'явилась, поріг можна піднімати.
+    """
+    leaked = indexed.search("Яка у нас політика відпусток для чергових інженерів?", limit=3)
+    assert leaked, "поріг несподівано відсік — перевір калібрування в config.KB_MIN_DENSE_SCORE"
 
 
 # --- каталог -------------------------------------------------------------------

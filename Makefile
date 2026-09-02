@@ -46,3 +46,10 @@ kb-index:      ## Переіндексувати KB у Qdrant стенду
 
 test:          ## Офлайн-тести (Qdrant у режимі :memory:, без docker)
 	.venv/bin/python -m pytest tests -q
+
+.PHONY: eval eval-online
+eval:          ## Детермінований гейт евалів (без ключа, без стенду)
+	.venv/bin/python -m pytest tests/test_eval_gate.py -q
+
+eval-online:   ## Прогін датасету справжнім агентом + LLM-judge (потрібен ANTHROPIC_API_KEY)
+	.venv/bin/python -m evals.run
