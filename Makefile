@@ -36,3 +36,13 @@ urls:
 	@echo "Qdrant        http://localhost:6333/dashboard"
 	@echo "chaos-svc     http://localhost:8080"
 	@echo "Langfuse      http://localhost:3001 (demo@local / demodemo123)"
+
+.PHONY: install kb-index test
+install:       ## Віртуальне оточення і залежності
+	python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
+
+kb-index:      ## Переіндексувати KB у Qdrant стенду
+	.venv/bin/python -m agents.kb.store
+
+test:          ## Офлайн-тести (Qdrant у режимі :memory:, без docker)
+	.venv/bin/python -m pytest tests -q
