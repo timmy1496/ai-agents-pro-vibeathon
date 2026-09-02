@@ -12,6 +12,7 @@ from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from agents.observability import trace_config
 from agents.supervisor import build_supervisor
 from agents.tools.actions import SLACK_FILE, post_slack
 
@@ -21,7 +22,7 @@ supervisor = build_supervisor()  # один checkpointer на процес: тр
 
 def _handle(text: str, thread_id: str) -> str:
     state = supervisor.invoke({"messages": [{"role": "user", "content": text}]},
-                              config={"configurable": {"thread_id": thread_id}})
+                              config=trace_config(thread_id, tags=["sre-agent"]))
     answer = state["messages"][-1].content
     post_slack.invoke({"thread_id": thread_id, "text": answer})
     return answer
