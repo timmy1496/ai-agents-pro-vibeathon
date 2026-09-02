@@ -17,7 +17,7 @@ def routed(monkeypatch):
             return {"intent": intent, "service": service}
 
         monkeypatch.setattr(supervisor, "route", fake_route)
-        for name in ("knowledge_node", "incident_node"):
+        for name in ("knowledge_node", "incident_node", "review_node", "release_node"):
             monkeypatch.setattr(supervisor, name,
                                 lambda state, n=name: {"messages": [
                                     {"role": "assistant", "content": f"викликано {n}"}]})
@@ -38,12 +38,22 @@ def test_intent_reaches_the_right_worker(routed, intent, expected):
     assert expected in state["messages"][-1].content
 
 
-@pytest.mark.parametrize("intent", ["REVIEW", "RELEASE"])
-def test_unimplemented_intents_say_so_instead_of_guessing(routed, intent):
-    app = routed.make(intent)
+@pytest.mark.parametrize("intent, expected", [
+    ("REVIEW", "review_node"),
+    ("RELEASE", "release_node"),
+])
+def test_review_and_release_reach_their_workers(routed, intent, expected):
+    app = routed.make(intent, service="demo-chaos-svc")
     state = app.invoke({"messages": [{"role": "user", "content": "перевір сервіс"}]},
-                       config={"configurable": {"thread_id": "t2"}})
-    assert "roadmap" in state["messages"][-1].content
+                       config={"configurable": {"thread_id": f"t-{intent}"}})
+    assert expected in state["messages"][-1].content
+
+
+def test_unknown_intent_asks_for_clarification(routed):
+    app = routed.make("HUMAN")
+    state = app.invoke({"messages": [{"role": "user", "content": "щось"}]},
+                       config={"configurable": {"thread_id": "t-human"}})
+    assert "Уточни" in state["messages"][-1].content
 
 
 def test_thread_keeps_history_between_calls(routed):

@@ -4,9 +4,8 @@
 по базі знань, ревізує сервіси, стежить за метриками після релізу.
 Читає вільно, діє тільки через людину (HITL). Усе на синтетиці — жодних прод-доступів.
 
-**Статус:** D1 — стенд, KB, A0 Supervisor, A1 Knowledge, A2 Incident Responder,
-датасет і гейт евалів, HTTP-вхід зі Slack-емуляцією.
-Далі: A4 Release Monitor, A3 Reviewer, Langfuse-обв'язка.
+**Статус:** усі п'ять агентів брифу, датасет і гейт евалів, HTTP-вхід зі Slack-емуляцією,
+трейси в Langfuse.
 
 ```
 make install && make test    # 93 тести, ~21 с, без docker і без API-ключа
@@ -73,6 +72,8 @@ make selfcheck     # проганяє chaos-режими chaos-svc через Te
 | A1 Knowledge | відповіді по KB, контекст для інших | дешева | search_kb, similar_incidents, get_service, list_services |
 | A2 Incident Responder | RCA за алертом + критик | сильна / дешева на критика | golden_signals, query_loki_patterns, get_deploys, k8s_events, + A1 |
 | A0 Supervisor | роутер намірів, стан треда | дешева | — (маршрутизація) |
+| A3 Service Reviewer | ревізія логів і алертів, YAML правил | без LLM | get_alert_rules, логи, каталог |
+| A4 Release Monitor | метрики після релізу | дешева, один крок | golden_signals, каталог |
 
 A0 класифікує намір (ALERT · RCA · KB · REVIEW · RELEASE · HUMAN) і маршрутизує на воркера.
 `thread_id` = ідентифікатор Slack-треда, тому продовження розмови в тому самому треді
@@ -136,6 +137,20 @@ accuracy по класу причини, tool recall, groundedness, і дода�
 («оціни, чи знайдене відповідає на питання, інакше — "у базі немає"»).
 Тест `test_threshold_alone_does_not_separate_in_from_out` фіксує цю межу явно: коли
 щілина з'явиться, він впаде і скаже підняти поріг.
+
+## A3 і A4: де LLM не потрібен
+
+**A3 Service Reviewer** не має LLM взагалі. Оцінка «у вас немає алерту на latency» не
+має залежати від настрою моделі, тому чекліст — детермінований Python: частка
+структурованих логів, наявність `level` і `trace_id`, PII у записах; покриття golden
+signals алертами, `runbook_url` у мітках, наявність `for`. На виході скоркарт A–F і
+готовий YAML правил для непокритих сигналів — з `for` і `severity` за tier сервісу і
+порогом latency з його ж SLO.
+
+**A4 Release Monitor** — workflow, а не агент: пороги за tier рахуються в коді, LLM
+робить рівно один крок — формулює вердикт для Slack і не має права змінити статус.
+
+MVP-обріз A3 з брифу дотриманий: логування + алерти. Дашборди і ресурси — roadmap.
 
 ## Наскрізний сценарій
 

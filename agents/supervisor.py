@@ -42,10 +42,7 @@ class SupervisorState(MessagesState):
     service: str
 
 
-NOT_IMPLEMENTED = {
-    "REVIEW": "Ревізія сервісу (A3) ще не реалізована — у roadmap.",
-    "RELEASE": "Моніторинг релізу (A4) ще не реалізований — у roadmap.",
-}
+NOT_IMPLEMENTED: dict[str, str] = {}
 
 
 def _last_user_text(state: SupervisorState) -> str:
@@ -78,10 +75,41 @@ def incident_node(state: SupervisorState) -> dict:
     return {"messages": [{"role": "assistant", "content": render_report(outcome)}]}
 
 
+def review_node(state: SupervisorState) -> dict:
+    from agents.service_reviewer import review
+
+    if not state["service"]:
+        return {"messages": [{"role": "assistant", "content": "Вкажи сервіс: /sre review <service>"}]}
+    return {"messages": [{"role": "assistant", "content": render_review(review(state["service"]))}]}
+
+
+def release_node(state: SupervisorState) -> dict:
+    from agents.release_monitor import monitor
+
+    if not state["service"]:
+        return {"messages": [{"role": "assistant", "content": "Вкажи сервіс: /sre release <service>"}]}
+    result = monitor(state["service"])
+    icon = {"healthy": ":white_check_mark:", "degraded": ":warning:",
+            "rollback_recommended": ":rotating_light:"}[result["status"]]
+    return {"messages": [{"role": "assistant", "content":
+        f"{icon} *{result['service']}* (tier {result['tier']}): `{result['status']}`\n"
+        f"{result['summary']}\n"
+        f"Пробиті пороги: {', '.join(result['breached']) or 'немає'}"}]}
+
+
+def render_review(result: dict) -> str:
+    lines = [f"*Ревізія {result['service']}* — загальна оцінка `{result['overall_grade']}`", ""]
+    for section in result["sections"]:
+        lines.append(f"*{section['section']}*: `{section['grade']}`")
+        lines += [f"  • {finding}" for finding in section["findings"]] or ["  • зауважень немає"]
+    if result["proposed_alert_rules"]:
+        lines += ["", "*Пропоновані правила алертів:*", "```", result["proposed_alert_rules"], "```"]
+    return "\n".join(lines)
+
+
 def human_node(state: SupervisorState) -> dict:
-    message = NOT_IMPLEMENTED.get(state["intent"],
-                                  "Не зрозумів запит. Уточни сервіс і що саме перевірити.")
-    return {"messages": [{"role": "assistant", "content": message}]}
+    return {"messages": [{"role": "assistant",
+                          "content": "Не зрозумів запит. Уточни сервіс і що саме перевірити."}]}
 
 
 def render_report(outcome: dict) -> str:
@@ -105,7 +133,8 @@ def render_report(outcome: dict) -> str:
 
 
 def _next_node(state: SupervisorState) -> str:
-    return {"ALERT": "incident", "RCA": "incident", "KB": "knowledge"}.get(state["intent"], "human")
+    return {"ALERT": "incident", "RCA": "incident", "KB": "knowledge",
+            "REVIEW": "review", "RELEASE": "release"}.get(state["intent"], "human")
 
 
 def build_supervisor(checkpointer=None):
@@ -113,11 +142,14 @@ def build_supervisor(checkpointer=None):
     graph.add_node("route", route)
     graph.add_node("knowledge", knowledge_node)
     graph.add_node("incident", incident_node)
+    graph.add_node("review", review_node)
+    graph.add_node("release", release_node)
     graph.add_node("human", human_node)
 
     graph.add_edge(START, "route")
-    graph.add_conditional_edges("route", _next_node, ["knowledge", "incident", "human"])
-    for node in ("knowledge", "incident", "human"):
+    graph.add_conditional_edges("route", _next_node,
+                                ["knowledge", "incident", "review", "release", "human"])
+    for node in ("knowledge", "incident", "review", "release", "human"):
         graph.add_edge(node, END)
 
     return graph.compile(checkpointer=checkpointer or InMemorySaver())

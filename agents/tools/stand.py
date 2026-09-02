@@ -10,7 +10,7 @@ import json
 
 from langchain_core.tools import tool
 
-from agents.config import ALERTMANAGER_URL, DATA_DIR
+from agents.config import ALERTMANAGER_URL, DATA_DIR, PROMETHEUS_URL
 from agents.tools.observability import _get
 
 
@@ -66,4 +66,32 @@ def get_active_alerts(service: str | None = None) -> list[dict]:
         }
         for alert in alerts
         if service is None or alert["labels"].get("service") == service
+    ]
+
+
+@tool
+def get_alert_rules(service: str | None = None) -> list[dict]:
+    """Правила алертів з Prometheus: вираз, for, severity, чи є runbook_url.
+
+    Потрібен для ревізії: покриття golden signals і наявність runbook у мітках —
+    саме те, чого зазвичай бракує, і саме те, що видно лише з правил, а не з метрик.
+    """
+    try:
+        payload = _get(f"{PROMETHEUS_URL}/api/v1/rules", {"type": "alert"})
+    except OSError as error:
+        return [{"error": f"prometheus недоступний: {error}"}]
+
+    return [
+        {
+            "name": rule["name"],
+            "expr": rule["query"],
+            "for": rule.get("duration", 0),
+            "severity": rule.get("labels", {}).get("severity"),
+            "runbook_url": rule.get("annotations", {}).get("runbook_url"),
+            "group": group["name"],
+        }
+        for group in payload.get("data", {}).get("groups", [])
+        for rule in group.get("rules", [])
+        if rule.get("type") == "alerting"
+        and (service is None or service in rule.get("query", ""))
     ]
