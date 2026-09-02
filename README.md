@@ -4,8 +4,9 @@
 по базі знань, ревізує сервіси, стежить за метриками після релізу.
 Читає вільно, діє тільки через людину (HITL). Усе на синтетиці — жодних прод-доступів.
 
-**Статус:** D1 — стенд, KB, A1 Knowledge, A2 Incident Responder, датасет і гейт евалів.
-Далі: A0 Supervisor, A4 Release Monitor, A3 Reviewer, Langfuse-обв'язка.
+**Статус:** D1 — стенд, KB, A0 Supervisor, A1 Knowledge, A2 Incident Responder,
+датасет і гейт евалів, HTTP-вхід зі Slack-емуляцією.
+Далі: A4 Release Monitor, A3 Reviewer, Langfuse-обв'язка.
 
 ```
 make install && make test    # 93 тести, ~21 с, без docker і без API-ключа
@@ -71,6 +72,12 @@ make selfcheck     # проганяє chaos-режими chaos-svc через Te
 |---|---|---|---|
 | A1 Knowledge | відповіді по KB, контекст для інших | дешева | search_kb, similar_incidents, get_service, list_services |
 | A2 Incident Responder | RCA за алертом + критик | сильна / дешева на критика | golden_signals, query_loki_patterns, get_deploys, k8s_events, + A1 |
+| A0 Supervisor | роутер намірів, стан треда | дешева | — (маршрутизація) |
+
+A0 класифікує намір (ALERT · RCA · KB · REVIEW · RELEASE · HUMAN) і маршрутизує на воркера.
+`thread_id` = ідентифікатор Slack-треда, тому продовження розмови в тому самому треді
+бачить попередні кроки. Нереалізовані наміри (REVIEW, RELEASE) чесно кажуть, що вони в roadmap,
+а не імітують роботу.
 
 A2 віддає структурований `RCAReport` (`root_cause_label`, `evidence[]` з посиланням на
 запит, `recommended_actions`, `confidence`), далі дешевий критик перевіряє groundedness
@@ -130,11 +137,43 @@ accuracy по класу причини, tool recall, groundedness, і дода�
 Тест `test_threshold_alone_does_not_separate_in_from_out` фіксує цю межу явно: коли
 щілина з'явиться, він впаде і скаже підняти поріг.
 
+## Наскрізний сценарій
+
+```
+make up            # стенд
+make agent         # агент на :8000 (в іншому терміналі)
+make incident-1    # chaos -> алерт -> webhook -> RCA -> тред
+open http://localhost:8000
+```
+
+`POST /webhook/alert` приймає алерт і одразу відповідає Alertmanager (RCA триває десятки
+секунд, а він ретраїть за таймаутом), розслідування йде у фоні. `thread_id` береться з
+`fingerprint` алерту — одна група алертів дає один тред. `POST /sre` — емуляція
+слеш-команди, `POST /approve` — кнопка підтвердження під пропозицією дії.
+
+## Що дав перший живий прогін датасету
+
+Підставна модель у тестах не викликає тули паралельно і не зациклюється, тому три
+дефекти знайшлись лише на справжніх моделях:
+
+| Симптом | Причина | Виправлення |
+|---|---|---|
+| `dictionary changed size during iteration` | `QdrantClient` з локальним інференсом не потокобезпечний, а агент кличе тули паралельно | `RLock` на весь доступ до Qdrant |
+| Порожній звіт на 3 з 14 кейсів | `run_limit=8` з'їдався розслідуванням, на синтез кроку не лишалось | ліміт 12 + гарантований крок `synthesize()` |
+| Звіту немає взагалі | агент кликав `propose_action` разом зі звітом, HITL зупиняв граф | у промпті явний порядок: спершу звіт |
+
+Плюс дірка в самому гейті: дискримінатор `capacity` був `rps is not None` — істина
+завжди. Замінив незалежні предикати на **детермінований класифікатор з пріоритетом**
+(`resources → config → dependency → release → capacity`), і гейт одразу знайшов три
+двозначні кейси, які карали агента за чесну відповідь.
+
 ## Свідомі спрощення
 
 - **Kubernetes не піднімаємо.** `k8s_events` читає `data/k8s_events.json`; сигнатура тулу
   така сама, як була б у kind. Додати kind — коли знадобиться реальний scheduling.
-- **Langfuse v2, не v3** — один postgres замість clickhouse+redis+minio.
+- **Langfuse v3, шість контейнерів.** Спершу взяв v2 заради одного postgres — але SDK
+  Langfuse v2 написаний під `langchain.callbacks` з LangChain 0.x, якого в 1.x немає.
+  «Легкого варіанту» тут не існує.
 - **Без reranker'а** на 20 документів KB: BM25 + e5-small дають точні хіти по іменах
   сервісів і кодах помилок. Додати bge-reranker — коли KB перевалить за ~200 документів.
 - **Slack емулюється** файлом `data/slack_threads.json` — формат повідомлення той самий.

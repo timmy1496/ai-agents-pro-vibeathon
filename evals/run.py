@@ -56,6 +56,7 @@ def summarise(rows: list[dict]) -> dict:
         "root_cause_accuracy": round(sum(r["root_cause_match"] for r in rows) / total, 3),
         "tool_recall": round(sum(not r["missing_tools"] for r in rows) / total, 3),
         "grounded_rate": round(sum(r["grounded"] for r in rows) / total, 3),
+        "self_completed": round(sum(not r.get("fallback_synthesis") for r in rows) / total, 3),
         "avg_revisions": round(sum(r["revisions"] for r in rows) / total, 2),
         **({"avg_correctness": round(sum(j["correctness"] for j in scored) / len(scored), 2),
             "avg_groundedness": round(sum(j["groundedness"] for j in scored) / len(scored), 2),

@@ -43,11 +43,17 @@ def test_expected_tools_run_on_recorded_output(fixed):
 
 @pytest.mark.parametrize("fixed", RCA_CASES, ids=ids(RCA_CASES), indirect=True)
 def test_case_is_solvable_from_its_own_evidence(fixed):
-    """Хибно розмічений кейс тихо псує весь датасет — ловимо це тут, а не на judge."""
+    """Хибно розмічений або двозначний кейс тихо псує весь датасет.
+
+    Детермінований класифікатор має прийти рівно до очікуваного класу: якщо він приходить
+    до іншого, кейс карає агента за чесну відповідь, а не перевіряє його.
+    """
     evidence = runner.collect_evidence(fixed)
-    assert runner.is_solvable(fixed, evidence), (
-        f"{fixed['id']}: у доказах немає ознаки класу '{fixed['expected_root_cause']}' — "
-        f"кейс або розмічений хибно, або нерозв'язний")
+    actual = runner.classify(evidence)
+    assert actual in runner._acceptable(fixed), (
+        f"{fixed['id']}: докази вказують на '{actual}', а еталон — "
+        f"'{fixed['expected_root_cause']}'. Уточни фікстури або визнай двозначність "
+        f"через acceptable_root_causes")
 
 
 @pytest.mark.parametrize("fixed", [c for c in RCA_CASES if c.get("must_escalate")],
@@ -55,9 +61,8 @@ def test_case_is_solvable_from_its_own_evidence(fixed):
 def test_escalation_cases_really_lack_evidence(fixed):
     """Кейс 'агент має відмовитись' має бути справді без доказів, інакше він нічого не тестує."""
     evidence = runner.collect_evidence(fixed)
-    for label in ("release", "dependency", "resources"):
-        assert not runner.DISCRIMINATORS[label](evidence), \
-            f"{fixed['id']}: є ознака '{label}' — кейс не про відмову"
+    assert runner.classify(evidence) == "unknown", \
+        f"{fixed['id']}: докази вказують на '{runner.classify(evidence)}' — кейс не про відмову"
 
 
 @pytest.mark.parametrize("fixed", [c for c in RCA_CASES if c.get("injection_marker")],

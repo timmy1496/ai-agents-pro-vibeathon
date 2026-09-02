@@ -36,7 +36,9 @@
       rps: {current: [40.0, 41.0], baseline: [40.0]}
       restarts: {current: [0], baseline: [0]}
       memory_bytes: {current: [210000000], baseline: [205000000]}
-    logs: [{msg: "slow query in cart enrichment path", count: 60, level: warn}]
+    # Лог має вказувати на власний код, а не на залежність: інакше кейс двозначний
+    # і "dependency" стає такою ж чесною відповіддю, як еталонний "release".
+    logs: [{msg: "pricing rules evaluation took 1680ms in checkout handler", count: 60, level: warn}]
     deploys: [{minutes_ago: 6, version: "2.13.0", author: maks}]
 
 # ---------- залежність ----------
@@ -103,6 +105,8 @@
   service: search-api
   input: "FrequentRestarts на search-api після викату v4.2.0, памʼять пилкою"
   expected_root_cause: resources
+  # leak, що приїхав релізом — обидві відповіді чесні, і судити треба обидві
+  acceptable_root_causes: [release]
   expect_tools: [get_service, golden_signals, k8s_events, get_deploys, similar_incidents]
   fixtures:
     metrics:
@@ -160,8 +164,11 @@
   kind: rca
   intent: ALERT
   service: notification-worker
-  input: "Черга росте 20 хвилин, вік найстарішого повідомлення 40 хвилин"
+  input: "Черга росте 20 хвилин, вік найстарішого повідомлення 40 хвилин: публікація
+    зросла з 20 до 200 повідомлень/с, кількість консюмерів не змінилась"
   expected_root_cause: capacity
+  # без метрики глибини черги "unknown" теж чесна відповідь — не караємо за обережність
+  acceptable_root_causes: [unknown]
   expect_tools: [get_service, golden_signals, similar_incidents, search_kb]
   fixtures:
     metrics:

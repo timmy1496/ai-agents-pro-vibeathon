@@ -9,18 +9,64 @@ from __future__ import annotations
 
 from evals.cases import tool_args
 
-# Який доказ робить кейс розв'язним для кожного класу причини. Якщо доказу немає —
-# кейс або розмічений хибно, або нерозв'язний, і модель тут ні до чого.
-DISCRIMINATORS = {
-    "release": lambda ev: any(d["minutes_ago"] <= 15 for d in ev["deploys"]),
-    "dependency": lambda ev: any("timeout" in p["pattern"].lower() for p in ev["patterns"]),
-    "resources": lambda ev: any(e["reason"] in ("OOMKilling", "BackOff") for e in ev["k8s_events"]),
-    "config": lambda ev: any("ConfigMap" in e["message"] or "probe" in e["message"].lower()
-                             for e in ev["k8s_events"]),
-    "capacity": lambda ev: ev["signals"]["rps"]["current_avg"] is not None,
-    "unknown": lambda ev: not any(
-        DISCRIMINATORS[label](ev) for label in ("release", "dependency", "resources")),
-}
+# Детермінований класифікатор доказів. Не для продакшену — це інструмент якості
+# датасету: він відповідає на питання "на що взагалі вказують докази цього кейса".
+# Раніше тут були незалежні предикати на клас, і вони перетиналися на грубих ключових
+# словах (лог зі словом "cache" робив кейс одночасно і resources, і capacity). Порядок
+# знімає перетини так само, як це робить жива тріаж-послідовність: спершу найбільш
+# специфічний сигнал, потім слабші.
+SATURATION_WORDS = ("cache", "queue", "consumer lag", "pool", "eviction")
+DEPLOY_WINDOW_MINUTES = 15  # той самий, що й у промпті A2
+
+
+def _has_oom(evidence: dict) -> bool:
+    return any(e["reason"] in ("OOMKilling", "BackOff") for e in evidence["k8s_events"])
+
+
+def _has_config_change(evidence: dict) -> bool:
+    """Зміна конфігу або тріпотіння готовності — на метриках це виглядає як що завгодно."""
+    events = evidence["k8s_events"]
+    return (any(e["reason"] == "ConfigMapUpdated" for e in events)
+            or sum(e["reason"] == "Unhealthy" for e in events) >= 2)
+
+
+def _has_timeout_pattern(evidence: dict) -> bool:
+    return any("timeout" in p["pattern"].lower() for p in evidence["patterns"])
+
+
+def _has_recent_deploy(evidence: dict) -> bool:
+    return any(d["minutes_ago"] <= DEPLOY_WINDOW_MINUTES for d in evidence["deploys"])
+
+
+def _has_saturation(evidence: dict) -> bool:
+    rps = evidence["signals"]["rps"]
+    spike = (rps["current_avg"] or 0) >= 3 * (rps["baseline_avg"] or 1e9)
+    pattern = any(word in p["pattern"].lower()
+                  for p in evidence["patterns"][:3] for word in SATURATION_WORDS)
+    return spike or pattern
+
+
+# Порядок = специфічність сигналу. OOM іде перед деплоєм свідомо: leak, що приїхав
+# релізом, лікується як проблема ресурсів, а не відкотом (див. kb/runbooks/oomkilled-restarts.md).
+CLASSIFIER = (
+    ("resources", _has_oom),
+    ("config", _has_config_change),
+    ("dependency", _has_timeout_pattern),
+    ("release", _has_recent_deploy),
+    ("capacity", _has_saturation),
+)
+
+
+def classify(evidence: dict) -> str:
+    """Клас причини, на який вказують докази. 'unknown', якщо не вказують ні на що."""
+    return next((label for label, fires in CLASSIFIER if fires(evidence)), "unknown")
+
+
+def _acceptable(case: dict) -> set[str]:
+    """Класи причини, які зараховуються. Інциденти бувають шаруваті: leak, що приїхав
+    релізом, чесно описується і як 'resources', і як 'release' — датасет це визнає явно,
+    замість того щоб карати агента за правильну відповідь."""
+    return {case["expected_root_cause"], *case.get("acceptable_root_causes", [])}
 
 
 def collect_evidence(case: dict) -> dict:
@@ -48,8 +94,8 @@ def run_trajectory(case: dict) -> dict[str, object]:
 
 
 def is_solvable(case: dict, evidence: dict) -> bool:
-    """Чи є у зібраних доказах те, що відрізняє цей клас причини від інших."""
-    return DISCRIMINATORS[case["expected_root_cause"]](evidence)
+    """Чи вказують докази саме на очікуваний клас (або на визнану альтернативу)."""
+    return classify(evidence) in _acceptable(case)
 
 
 def run_online(case: dict, config: dict | None = None) -> dict:
@@ -70,7 +116,9 @@ def run_online(case: dict, config: dict | None = None) -> dict:
         "tools_called": tools_called,
         "missing_tools": sorted(set(case.get("expect_tools", [])) - set(tools_called)),
         "report": result["report"],
-        "root_cause_match": result["report"].root_cause_label == case["expected_root_cause"],
+        "root_cause_match": result["report"].root_cause_label in _acceptable(case),
         "revisions": result["revisions"],
         "grounded": result["verdict"].grounded,
+        # видно в звіті: чи агент дійшов до висновку сам, чи його дотягнув запобіжник
+        "fallback_synthesis": result.get("fallback_synthesis", False),
     }
