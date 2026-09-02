@@ -4,7 +4,11 @@
 по базі знань, ревізує сервіси, стежить за метриками після релізу.
 Читає вільно, діє тільки через людину (HITL). Усе на синтетиці — жодних прод-доступів.
 
-**Статус:** крок D1-ранок — стенд, синтетичний каталог і база знань. Агентів ще немає.
+**Статус:** D1 — стенд, KB, A1 Knowledge, A2 Incident Responder. Далі: A0 Supervisor, датасет і гейт.
+
+```
+make install && make test    # 51 тест, ~3 с, без docker і без API-ключа
+```
 
 ## Швидкий старт
 
@@ -58,6 +62,30 @@ scripts/        incident.sh (сценарії), record.py (події), load.js 
 make selfcheck     # проганяє chaos-режими chaos-svc через TestClient
 ```
 
+## Агенти
+
+| Агент | Роль | Модель | Тули |
+|---|---|---|---|
+| A1 Knowledge | відповіді по KB, контекст для інших | дешева | search_kb, similar_incidents, get_service, list_services |
+| A2 Incident Responder | RCA за алертом + критик | сильна / дешева на критика | golden_signals, query_loki_patterns, get_deploys, k8s_events, + A1 |
+
+A2 віддає структурований `RCAReport` (`root_cause_label`, `evidence[]` з посиланням на
+запит, `recommended_actions`, `confidence`), далі дешевий критик перевіряє groundedness
+і за потреби відправляє на доопрацювання — не більше двох обертів.
+
+## Межі агента
+
+- Read-тули читають вільно; write-тулів рівно три: `post_slack`, `create_annotation`,
+  `propose_action`. Дії в інфраструктурі агент не виконує ніколи.
+- `propose_action` під `HumanInTheLoopMiddleware` — граф зупиняється на interrupt.
+- Деструктивні команди (`kubectl delete`, `DROP TABLE`, `rm -rf`, `terraform destroy`…)
+  відхиляються до того, як пропозиція дійде до людини.
+- `ModelCallLimitMiddleware(run_limit=8)` — стеля кроків на інцидент.
+- `PIIMiddleware(apply_to_tool_results=True)` — PII заходить у контекст з лог-рядків,
+  а не з питання користувача, тому дефолтного `apply_to_input` тут недостатньо.
+- Логи — недовірений текст: у промпт ідуть патерни з лічильником і 3 приклади,
+  а не 2000 сирих рядків.
+
 ## Свідомі спрощення
 
 - **Kubernetes не піднімаємо.** `k8s_events` читає `data/k8s_events.json`; сигнатура тулу
@@ -65,4 +93,8 @@ make selfcheck     # проганяє chaos-режими chaos-svc через Te
 - **Langfuse v2, не v3** — один postgres замість clickhouse+redis+minio.
 - **Без reranker'а** на 20 документів KB: BM25 + e5-small дають точні хіти по іменах
   сервісів і кодах помилок. Додати bge-reranker — коли KB перевалить за ~200 документів.
-- **Slack емулюється** HTTP-ендпоінтом агента, а не реальним workspace.
+- **Slack емулюється** файлом `data/slack_threads.json` — формат повідомлення той самий.
+- **RCA-тули б'ють у Prometheus/Loki напряму, не через Grafana MCP.** Бриф вимагає
+  Context-Minimization і офлайн-евали на фікстурах — MCP віддає сирі відповіді й тягне
+  живий стенд у кожен прогін. Grafana MCP лишається на annotations / alert rules /
+  panel images, де він справді унікальний.

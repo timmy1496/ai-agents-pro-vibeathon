@@ -12,6 +12,11 @@ CATALOG_FILE = ROOT / "catalog" / "services.yaml"
 DATA_DIR = ROOT / "data"
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+LOKI_URL = os.getenv("LOKI_URL", "http://localhost:3100")
+GRAFANA_URL = os.getenv("GRAFANA_URL", "http://localhost:3000")
+GRAFANA_AUTH = os.getenv("GRAFANA_AUTH", "admin:admin")
+ALERTMANAGER_URL = os.getenv("ALERTMANAGER_URL", "http://localhost:9093")
 KB_COLLECTION = os.getenv("KB_COLLECTION", "sre_kb")
 
 # Локальні ONNX-моделі через fastembed: без API-викликів, працює офлайн.
