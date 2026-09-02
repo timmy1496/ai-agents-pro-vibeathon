@@ -28,9 +28,19 @@ KB_COLLECTION = os.getenv("KB_COLLECTION", "sre_kb")
 DENSE_MODEL = os.getenv("KB_DENSE_MODEL", "intfloat/multilingual-e5-large")
 SPARSE_MODEL = os.getenv("KB_SPARSE_MODEL", "Qdrant/bm25")
 
+# Провайдер визначається за ключем: sk-or-... це OpenRouter, він говорить
+# OpenAI-сумісним протоколом, а не Anthropic-нативним, тому клієнт інший.
+OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY") or (
+    os.getenv("ANTHROPIC_API_KEY", "") if os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-or-") else "")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
 # Каскад моделей: дешева на router/grade/judge, сильна на RCA-синтез.
-CHEAP_MODEL = os.getenv("CHEAP_MODEL", "anthropic:claude-haiku-4-5-20251001")
-STRONG_MODEL = os.getenv("STRONG_MODEL", "anthropic:claude-sonnet-5")
+CHEAP_MODEL = os.getenv("CHEAP_MODEL",
+                        "anthropic/claude-haiku-4.5" if OPENROUTER_KEY
+                        else "anthropic:claude-haiku-4-5-20251001")
+STRONG_MODEL = os.getenv("STRONG_MODEL",
+                         "anthropic/claude-sonnet-5" if OPENROUTER_KEY
+                         else "anthropic:claude-sonnet-5")
 
 # Грубий відсів хвоста по dense-косинусу. НЕ повноцінний fail-closed, і ось чому:
 # заміряно на 13 запитах — релевантні лягли в 0.782..0.866, сторонні в 0.752..0.805.

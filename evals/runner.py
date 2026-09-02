@@ -59,6 +59,11 @@ def run_online(case: dict, config: dict | None = None) -> dict:
     result = investigate({"summary": case["input"], "service": case["service"]}, config=config)
     tool_messages = [m for m in result["state"]["messages"] if m.type == "tool"]
     tools_called = [m.name for m in tool_messages]
+    if result["report"] is None:
+        return {"case_id": case["id"], "tools_called": tools_called,
+                "missing_tools": sorted(set(case.get("expect_tools", [])) - set(tools_called)),
+                "report": None, "tool_log": "", "root_cause_match": False,
+                "revisions": result["revisions"], "grounded": False, "error": result["error"]}
     return {
         "tool_log": "\n".join(f"[{m.name}] {m.content}" for m in tool_messages),
         "case_id": case["id"],

@@ -32,9 +32,9 @@ actionability: дії конкретні, з runbook, у правильному 
 
 
 def judge(case: dict, report, tool_log: str, model: str = CHEAP_MODEL) -> JudgeVerdict:
-    from langchain.chat_models import init_chat_model
+    from agents.models import resolve
 
-    grader = init_chat_model(model).with_structured_output(JudgeVerdict)
+    grader = resolve(model).with_structured_output(JudgeVerdict)
     return grader.invoke([
         {"role": "system", "content": JUDGE_PROMPT},
         {"role": "user", "content":

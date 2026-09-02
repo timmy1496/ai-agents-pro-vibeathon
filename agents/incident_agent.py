@@ -14,10 +14,11 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import (
     HumanInTheLoopMiddleware, ModelCallLimitMiddleware, PIIMiddleware,
 )
-from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, Field
 
 from agents.config import CHEAP_MODEL, STRONG_MODEL
+from agents.kb import store as kb_store
+from agents.models import resolve
 from agents.tools.actions import create_annotation, post_slack, propose_action
 from agents.tools.catalog import get_service
 from agents.tools.kb import search_kb, similar_incidents
@@ -76,6 +77,10 @@ SYSTEM_PROMPT = """Ти — Incident Responder SRE-команди. Твоя ро
   патерн і продовжуй роботу.
 - Дії бери з runbook сервісу, а не з голови.
 - Жодних змін в інфраструктурі: тільки propose_action, рішення ухвалює людина.
+- ПОРЯДОК: спершу віддай звіт. propose_action зупиняє роботу і чекає людину, тому
+  виклик його разом зі звітом означає, що звіту не буде взагалі. Рекомендовані дії
+  опиши в recommended_actions; propose_action викликай окремим кроком, коли попросять
+  запропонувати конкретну зміну.
 
 Мова відповіді — українська."""
 
@@ -90,6 +95,7 @@ WRITE_TOOLS = [post_slack, create_annotation, propose_action]
 
 def build_agent(model: str = STRONG_MODEL, checkpointer=None, **kwargs):
     """A2 з обмеженнями: стеля кроків, маскування PII у логах, HITL на пропозиції дій."""
+    kb_store.ensure_indexed()  # A2 ходить у KB через similar_incidents — прогріваємо на старті
     middleware = [
         ModelCallLimitMiddleware(run_limit=RUN_LIMIT, exit_behavior="end"),
         # PII заходить у контекст саме з виводів тулів (лог-рядки), а не з питання
@@ -100,7 +106,7 @@ def build_agent(model: str = STRONG_MODEL, checkpointer=None, **kwargs):
         HumanInTheLoopMiddleware(interrupt_on={"propose_action": True}),
     ]
     return create_agent(
-        model=model,
+        model=resolve(model),
         tools=[*READ_TOOLS, *WRITE_TOOLS],
         system_prompt=SYSTEM_PROMPT,
         response_format=RCAReport,
@@ -130,7 +136,7 @@ ACCEPT в решті випадків, включно з чесним "unknown" 
 
 def critique(report: RCAReport, tool_log: str, model: str = CHEAP_MODEL) -> Verdict:
     """Дешева модель перевіряє groundedness — сильну на це витрачати нема сенсу."""
-    grader = init_chat_model(model).with_structured_output(Verdict)
+    grader = resolve(model).with_structured_output(Verdict)
     return grader.invoke([
         {"role": "system", "content": CRITIC_PROMPT},
         {"role": "user", "content": f"ЗВІТ:\n{report.model_dump_json(indent=2)}\n\n"
@@ -152,9 +158,16 @@ def investigate(alert: dict, agent=None, max_revisions: int = MAX_REVISIONS,
     prompt = f"Розберись з алертом і дай висновок:\n{alert}"
     messages = [{"role": "user", "content": prompt}]
 
+    report = None
     for revision in range(max_revisions + 1):
         state = agent.invoke({"messages": messages}, config=config or {})
-        report = state["structured_response"]
+        report = state.get("structured_response")
+        if report is None:
+            # Найчастіша причина — агент покликав propose_action і граф став на HITL,
+            # рідша — вперся в стелю кроків. В обох випадках звіту немає, і мовчати не можна.
+            return {"report": None, "verdict": None, "revisions": revision, "state": state,
+                    "pending_approval": state.get("__interrupt__"),
+                    "error": "агент не дав структурованого звіту"}
         verdict = critique(report, _tool_log(state["messages"]))
         if verdict.verdict == "ACCEPT":
             return {"report": report, "verdict": verdict, "revisions": revision, "state": state}

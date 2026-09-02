@@ -53,3 +53,7 @@ eval:          ## Детермінований гейт евалів (без к�
 
 eval-online:   ## Прогін датасету справжнім агентом + LLM-judge (потрібен ANTHROPIC_API_KEY)
 	.venv/bin/python -m evals.run
+
+.PHONY: agent
+agent:         ## Запустити агента (вебхук Alertmanager + перегляд тредів на :8000)
+	.venv/bin/uvicorn agents.app:app --host 0.0.0.0 --port 8000

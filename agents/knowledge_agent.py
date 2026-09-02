@@ -9,6 +9,8 @@ from __future__ import annotations
 from langchain.agents import create_agent
 
 from agents.config import CHEAP_MODEL
+from agents.kb import store
+from agents.models import resolve
 from agents.tools.catalog import get_service, list_services
 from agents.tools.kb import search_kb, similar_incidents
 
@@ -34,7 +36,9 @@ TOOLS = [search_kb, similar_incidents, get_service, list_services]
 
 def build_agent(model: str = CHEAP_MODEL, **kwargs):
     """A1 як окремий граф. checkpointer/store передає викликач (supervisor)."""
-    return create_agent(model=model, tools=TOOLS, system_prompt=SYSTEM_PROMPT, **kwargs)
+    store.ensure_indexed()  # прогрів у головному потоці, поки тули ще не бігають паралельно
+    return create_agent(model=resolve(model), tools=TOOLS,
+                        system_prompt=SYSTEM_PROMPT, **kwargs)
 
 
 if __name__ == "__main__":

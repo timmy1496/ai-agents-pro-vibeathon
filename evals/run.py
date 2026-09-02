@@ -36,6 +36,9 @@ def run_case(case: dict, with_judge: bool, tmp: pathlib.Path) -> dict:
         monkeypatch.undo()
 
     row = {k: v for k, v in result.items() if k not in ("report", "tool_log")}
+    if result["report"] is None:
+        row["root_cause"] = "—"
+        return row
     row["root_cause"] = result["report"].root_cause_label
     row["confidence"] = result["report"].confidence
     row["evidence_count"] = len(result["report"].evidence)
@@ -91,8 +94,10 @@ def main(argv: list[str] | None = None) -> int:
 
     import os
 
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        print("Потрібен ANTHROPIC_API_KEY у .env — онлайн-прогін кличе модель.\n"
+    from agents.config import OPENROUTER_KEY  # імпорт тягне load_dotenv
+
+    if not (OPENROUTER_KEY or os.getenv("ANTHROPIC_API_KEY")):
+        print("Потрібен ANTHROPIC_API_KEY або OPENROUTER_API_KEY у .env.\n"
               "Детермінований гейт бігає без ключа: make eval", file=sys.stderr)
         return 2
 

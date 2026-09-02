@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import functools
+import threading
 
 from qdrant_client import QdrantClient, models
 
@@ -22,6 +23,24 @@ DENSE, SPARSE = "dense", "bm25"
 PREFETCH_LIMIT = 20  # скільки бере кожен ретривер до злиття
 PAYLOAD_FIELDS = ("text", "source", "title", "headings", "type", "service", "services",
                   "date", "tags", "root_cause_label", "severity")
+
+
+# ponytail: один RLock на весь доступ до Qdrant. Причина не в самій базі, а в клієнті:
+# при локальному інференсі QdrantClient тримає спільний акумулятор батчів ембеддингів і
+# ламається, коли агент кличе тули паралельно ("dictionary changed size during iteration",
+# а на індексації — напівстворені вектори). Ціна: пошук по KB серіалізований.
+# Прибрати, коли ембеддинги рахуватиме окремий сервіс, а не клієнт у процесі агента.
+_lock = threading.RLock()
+
+
+def _guarded(function):
+    """Серіалізує виклик — див. коментар біля _lock."""
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        with _lock:
+            return function(*args, **kwargs)
+
+    return wrapper
 
 
 @functools.cache
@@ -44,6 +63,7 @@ def _documents(text: str) -> dict:
             SPARSE: models.Document(text=text, model=SPARSE_MODEL)}
 
 
+@_guarded
 def reindex() -> int:
     """Перебудовує колекцію з нуля. KB маленька — інкрементальність тут зайва."""
     qdrant = client()
@@ -81,6 +101,20 @@ def _filter(**equals) -> models.Filter | None:
     return models.Filter(must=conditions) if conditions else None
 
 
+def ensure_indexed() -> None:
+    """Індексує KB, якщо колекції ще немає.
+
+    Потрібно і для режиму ":memory:" (кожен процес починає з порожньої бази), і для
+    першого запуску проти живого Qdrant.
+
+    Перевірка всередині лока — щоб другий потік не переіндексував услід за першим.
+    """
+    with _lock:
+        if not client().collection_exists(KB_COLLECTION):
+            reindex()
+
+
+@_guarded
 def _best_dense_score(query: str, query_filter: models.Filter | None) -> float:
     """Максимальний косинус по dense-гілці — єдиний сигнал з абсолютною шкалою."""
     response = client().query_points(
@@ -91,12 +125,14 @@ def _best_dense_score(query: str, query_filter: models.Filter | None) -> float:
     return response.points[0].score if response.points else 0.0
 
 
+@_guarded
 def search(query: str, *, limit: int = 5, min_score: float = KB_MIN_DENSE_SCORE, **equals) -> list[dict]:
     """Гібридний пошук з fail-closed відсіванням: порожній список = 'у базі немає'.
 
     Ранжує RRF (він точніший), а відсікає dense-косинус (у нього є шкала). Це два
     різні питання: "що релевантніше" і "чи є тут узагалі відповідь".
     """
+    ensure_indexed()
     query = normalize(query)
     query_filter = _filter(**equals)
     if _best_dense_score(query, query_filter) < min_score:
