@@ -57,3 +57,7 @@ eval-online:   ## Прогін датасету справжнім агенто�
 .PHONY: agent
 agent:         ## Запустити агента (вебхук Alertmanager + перегляд тредів на :8000)
 	.venv/bin/uvicorn agents.app:app --host 0.0.0.0 --port 8000
+
+.PHONY: demo-degradation
+demo-degradation:  ## Демо тихої деградації: змінили формат логів -> гейт червоніє
+	.venv/bin/python -m pytest tests/test_degradation.py -v
