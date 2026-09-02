@@ -1,0 +1,5 @@
+[
+  {"ts": "2026-09-01T08:40:12Z", "service": "demo-chaos-svc", "type": "Normal", "reason": "Created", "message": "Created container chaos-svc"},
+  {"ts": "2026-09-01T08:40:13Z", "service": "demo-chaos-svc", "type": "Normal", "reason": "Started", "message": "Started container chaos-svc"},
+  {"ts": "2026-08-31T16:05:20Z", "service": "payment-gateway", "type": "Normal", "reason": "ScalingReplicaSet", "message": "Scaled up replica set payment-gateway-7d9f to 4"}
+]

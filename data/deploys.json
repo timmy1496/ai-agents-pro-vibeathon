@@ -1,0 +1,7 @@
+[
+  {"ts": "2026-08-28T09:15:00Z", "service": "demo-chaos-svc", "version": "1.4.0", "author": "olena", "commit": "a3f91c2"},
+  {"ts": "2026-08-30T11:02:00Z", "service": "demo-chaos-svc", "version": "1.4.1", "author": "ihor", "commit": "7bd0e14"},
+  {"ts": "2026-09-01T08:40:00Z", "service": "demo-chaos-svc", "version": "1.4.2", "author": "olena", "commit": "c81a55f"},
+  {"ts": "2026-08-29T14:20:00Z", "service": "checkout-api", "version": "2.12.3", "author": "maks", "commit": "19ee402"},
+  {"ts": "2026-08-31T16:05:00Z", "service": "payment-gateway", "version": "3.0.7", "author": "dana", "commit": "5c2b8a9"}
+]

@@ -1,0 +1,111 @@
+# Синтетичний сервіс-каталог демо-стенду. Джерело правди для tool get_service/list_services.
+services:
+  - name: demo-chaos-svc
+    tier: 1
+    language: python
+    owner: team-orders
+    slack_channel: "#team-orders"
+    deps: [orders-db, payment-gateway]
+    dashboards: ["http://localhost:3000/d/demo-chaos-svc"]
+    runbook: kb/runbooks/high-error-rate.md
+    slo: { availability: 99.9, latency_p95_ms: 300 }
+    repo: github.com/timmy1496/demo-chaos-svc
+
+  - name: checkout-api
+    tier: 1
+    language: go
+    owner: team-checkout
+    slack_channel: "#team-checkout"
+    deps: [cart-service, payment-gateway, user-profile]
+    dashboards: ["http://localhost:3000/d/checkout-api"]
+    runbook: kb/runbooks/high-latency.md
+    slo: { availability: 99.95, latency_p95_ms: 250 }
+    repo: github.com/timmy1496/checkout-api
+
+  - name: payment-gateway
+    tier: 1
+    language: go
+    owner: team-payments
+    slack_channel: "#team-payments"
+    deps: [payments-db, stripe-api]
+    dashboards: ["http://localhost:3000/d/payment-gateway"]
+    runbook: kb/runbooks/dependency-down.md
+    slo: { availability: 99.99, latency_p95_ms: 400 }
+    repo: github.com/timmy1496/payment-gateway
+
+  - name: cart-service
+    tier: 1
+    language: node
+    owner: team-checkout
+    slack_channel: "#team-checkout"
+    deps: [redis-cart, user-profile]
+    dashboards: ["http://localhost:3000/d/cart-service"]
+    runbook: kb/runbooks/redis-saturation.md
+    slo: { availability: 99.9, latency_p95_ms: 150 }
+    repo: github.com/timmy1496/cart-service
+
+  - name: user-profile
+    tier: 2
+    language: python
+    owner: team-identity
+    slack_channel: "#team-identity"
+    deps: [users-db]
+    dashboards: ["http://localhost:3000/d/user-profile"]
+    runbook: kb/runbooks/high-latency.md
+    slo: { availability: 99.5, latency_p95_ms: 300 }
+    repo: github.com/timmy1496/user-profile
+
+  - name: search-api
+    tier: 2
+    language: java
+    owner: team-discovery
+    slack_channel: "#team-discovery"
+    deps: [elasticsearch]
+    dashboards: ["http://localhost:3000/d/search-api"]
+    runbook: kb/runbooks/oomkilled-restarts.md
+    slo: { availability: 99.5, latency_p95_ms: 500 }
+    repo: github.com/timmy1496/search-api
+
+  - name: notification-worker
+    tier: 3
+    language: python
+    owner: team-growth
+    slack_channel: "#team-growth"
+    deps: [rabbitmq, user-profile]
+    dashboards: ["http://localhost:3000/d/notification-worker"]
+    runbook: kb/runbooks/queue-backlog.md
+    slo: { availability: 99.0, latency_p95_ms: 2000 }
+    repo: github.com/timmy1496/notification-worker
+
+  - name: media-uploader
+    tier: 3
+    language: node
+    owner: team-content
+    slack_channel: "#team-content"
+    deps: [s3, media-db]
+    dashboards: ["http://localhost:3000/d/media-uploader"]
+    runbook: kb/runbooks/oomkilled-restarts.md
+    slo: { availability: 99.0, latency_p95_ms: 3000 }
+    repo: github.com/timmy1496/media-uploader
+
+  - name: podinfo-a
+    tier: 3
+    language: go
+    owner: team-platform
+    slack_channel: "#team-platform"
+    deps: []
+    dashboards: ["http://localhost:3000/d/podinfo"]
+    runbook: kb/runbooks/high-error-rate.md
+    slo: { availability: 99.0, latency_p95_ms: 500 }
+    repo: github.com/stefanprodan/podinfo
+
+  - name: podinfo-b
+    tier: 3
+    language: go
+    owner: team-platform
+    slack_channel: "#team-platform"
+    deps: []
+    dashboards: ["http://localhost:3000/d/podinfo"]
+    runbook: kb/runbooks/high-error-rate.md
+    slo: { availability: 99.0, latency_p95_ms: 500 }
+    repo: github.com/stefanprodan/podinfo

@@ -1,0 +1,16 @@
+global:
+  resolve_timeout: 1m
+
+route:
+  receiver: sre-agent
+  group_by: [alertname, service]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+receivers:
+  - name: sre-agent
+    webhook_configs:
+      # агент бігає на хості (uvicorn app:api --port 8000)
+      - url: http://host.docker.internal:8000/webhook/alert
+        send_resolved: true
