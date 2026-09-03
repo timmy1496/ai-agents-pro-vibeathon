@@ -35,7 +35,7 @@ urls:
 	@echo "Loki          http://localhost:3100"
 	@echo "Qdrant        http://localhost:6333/dashboard"
 	@echo "chaos-svc     http://localhost:8080"
-	@echo "Langfuse      http://localhost:3001 (demo@local / demodemo123)"
+	@echo "Langfuse      http://localhost:3001 (demo@example.com / demodemo123)"
 
 .PHONY: install kb-index test
 install:       ## Віртуальне оточення і залежності

@@ -1,0 +1,14 @@
+{
+  "live-demo": [
+    {
+      "author": "sre-agent",
+      "text": "*demo-chaos-svc* — гіпотеза: Деплой v1.5.0 (09:04:49) містить регресію в обробнику замовлень: код не перевіряє наявність payment_ref перед використанням, що спричиняє NullPointerException і 5xx на частині трафіку. Алерт HighErrorRate спрацював о 09:05:31, тобто через ~40 секунд після деплою — це майже точний збіг у часі.\nКлас причини: `release`, впевненість 93%\n\n*Докази:*\n• Активний алерт HighErrorRate critical: error rate 36.71% (>5%), started_at 09:05:31Z\n  _get_active_alerts(service=demo-chaos-svc)_\n• Деплой version 1.5.0 (commit deadbee) відбувся о 09:04:49Z — за 42 секунди до спрацювання алерту\n  _get_deploys(service=demo-chaos-svc)_\n• K8s подія Created container chaos-svc (v1.5.0) о 09:04:49Z, без OOMKilling/BackOff/Unhealthy у вікні\n  _k8s_events(service=demo-chaos-svc)_\n• Golden signals: error_rate current_avg 32.44%, max 36.71% при незмінних RPS (~4.5), latency p95 (9.6ms) і пам'яті — деградація локалізована саме в error rate, не в ресурсах чи трафіку\n  _golden_signals(service=demo-chaos-svc)_\n• У логах домінує патерн 'unhandled exception in order handler: NullPointer on payment_ref' — 546 разів за 30 хв, поряд з 'request failed' (546) — разом 100% error-логів\n  _query_loki_patterns(service=demo-chaos-svc, level=error, minutes=30)_\n• Ідентичний інцидент стався 2025-10-21: викат v1.3.0 дав 5xx до 35% з тим самим патерном 'NullPointer on payment_ref', root_cause_label=release, вирішено rollback-ом\n  _similar_incidents / kb/postmortems/2025-10-21-demo-chaos-svc-release-5xx.md_\n\n*Рекомендовані дії:*\n1. Виконати rollback demo-chaos-svc з v1.5.0 на попередню стабільну версію (за аналогією з rollback на v1.2.9 у попередньому інциденті) — це усуне регресію в order handler\n2. Після rollback перевірити error_rate у golden_signals — очікується падіння <1% протягом кількох хвилин\n3. Додати перевірку наявності payment_ref перед використанням у order handler та unit-тест на цей кейс перед повторним викатом v1.5.0\n4. Наблизити дані на stage до продових за розподілом (не покрито синтетичними тестами), як зазначено в action items попереднього постмортему\n5. Створити annotation в Grafana про деплой v1.5.0 як ймовірну причину для трасування на дашборді\n\n*Схожі інциденти:* kb/postmortems/2025-10-21-demo-chaos-svc-release-5xx.md\n\n_критик: ok, доопрацювань: 0_"
+    }
+  ],
+  "lf-check": [
+    {
+      "author": "sre-agent",
+      "text": "Власник **payment-gateway** — **team-payments**, tier — **1** (найвищий пріоритет).\n\nSLO сервісу: 99.99% availability, latency P95 ≤ 400ms. Залежить від payments-db та stripe-api."
+    }
+  ]
+}

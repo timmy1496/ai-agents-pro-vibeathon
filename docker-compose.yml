@@ -45,7 +45,9 @@ services:
     depends_on: [prometheus, loki]
 
   qdrant:
-    image: qdrant/qdrant:v1.13.1
+    # версія навмисно збігається з qdrant-client у requirements.txt: при розбіжності
+    # major/minor сервер не розуміє inference-обʼєкти клієнта і віддає 500
+    image: qdrant/qdrant:v1.19.0
     ports: ["6333:6333"]
 
   chaos-svc:
@@ -63,13 +65,13 @@ services:
     image: stefanprodan/podinfo:6.7.1
     labels:
       sre.service: podinfo-a
-    command: ["--port=9898"]
+    command: ["./podinfo", "--port=9898"]
 
   podinfo-b:
     image: stefanprodan/podinfo:6.7.1
     labels:
       sre.service: podinfo-b
-    command: ["--port=9898"]
+    command: ["./podinfo", "--port=9898"]
 
   loadgen:
     image: grafana/k6:0.55.0
@@ -168,5 +170,5 @@ services:
       LANGFUSE_INIT_PROJECT_ID: sre-agent
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-demo
       LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-demo
-      LANGFUSE_INIT_USER_EMAIL: demo@local
+      LANGFUSE_INIT_USER_EMAIL: demo@example.com   # zod вимагає валідний домен з TLD
       LANGFUSE_INIT_USER_PASSWORD: demodemo123
