@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: sre-agent
+    type: file
+    updateIntervalSeconds: 10
+    allowUiUpdates: true          # правки в UI не перетираються до перезапуску
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

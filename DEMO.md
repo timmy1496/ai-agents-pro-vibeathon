@@ -33,8 +33,8 @@ make reset                            # прибрати chaos з поперед
 | Що | Де |
 |---|---|
 | **Slack-канал** `#sre-agent` | головний екран демо |
+| **Grafana → SRE Agent — golden signals** | http://localhost:3000/d/demo-chaos-svc (admin/admin) |
 | Prometheus → Alerts | http://localhost:9090/alerts |
-| Grafana | http://localhost:3000 (admin/admin) |
 | Langfuse | http://localhost:3001 (demo@example.com / demodemo123) |
 
 ---
@@ -72,7 +72,12 @@ make incident-1
 > Chaos увімкнув 35% помилок і записав деплой v1.5.0. Prometheus зараз побачить
 > зростання 5xx, алерт перейде з pending у firing, Alertmanager смикне вебхук агента.
 
-Показати **Prometheus → Alerts**: `HighErrorRate` стає `firing`.
+Показати **дашборд Grafana**: error rate стрибає з ~0 до 35% і перетинає червону лінію
+порогу, а вертикальна оранжева мітка **деплою v1.5.0** стоїть рівно на початку сплеску.
+Це і є вся суть RCA, видима очима: збіг викату зі сплеском помилок.
+
+Внизу дашборда — панель логів: домінує `NullPointer on payment_ref`.
+У Prometheus → Alerts `HighErrorRate` уже `firing`.
 
 **Перейти у Slack-канал.** У ньому з'являється:
 

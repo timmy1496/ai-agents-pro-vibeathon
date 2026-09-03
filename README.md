@@ -31,7 +31,7 @@ webhook на `http://host.docker.internal:8000/webhook/alert` (агент на �
 
 | Компонент | Порт | Роль |
 |---|---|---|
-| Grafana | 3000 | дашборди, annotations, ціль Grafana MCP (admin/admin) |
+| Grafana | 3000 | дашборд `d/demo-chaos-svc`, annotations деплоїв (admin/admin) |
 | Prometheus | 9090 | метрики + alert rules |
 | Alertmanager | 9093 | вебхук в агента |
 | Loki | 3100 | логи (promtail збирає з docker) |
