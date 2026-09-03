@@ -207,3 +207,30 @@ def test_investigation_is_written_into_thread_memory(monkeypatch, tmp_path):
         {"configurable": {"thread_id": "інцидент-1"}}).values["messages"]
     assert len(saved) == 2, "у пам'яті треда мають бути питання і звіт"
     assert "регресія в v1.5.0" in saved[-1].content
+
+
+def test_memory_is_filled_when_the_report_is_published_not_after_the_critic(monkeypatch, tmp_path):
+    """Людина питає щойно побачила звіт — на 20-40 секунд раніше, ніж критик закінчить."""
+    import agents.app as app_module
+    import agents.tools.actions as actions
+    from agents.incident_agent import RCAReport, Verdict
+
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
+    monkeypatch.setattr(app_module, "_annotate", lambda service, text: None)
+
+    report = RCAReport(service="s", root_cause_label="release", hypothesis="h",
+                       confidence=0.9, evidence=[], recommended_actions=[])
+    order = []
+
+    def fake_investigate(alert, config=None, on_report=None, **kwargs):
+        on_report(report)
+        order.append(("памʼять після публікації", len(app_module.supervisor.get_state(
+            {"configurable": {"thread_id": "інц-2"}}).values.get("messages", []))))
+        return {"report": report, "verdict": Verdict(grounded=True, verdict="ACCEPT"),
+                "revisions": 0, "state": {"messages": []}}
+
+    monkeypatch.setattr("agents.incident_agent.investigate", fake_investigate)
+    app_module._investigate_and_post("HighErrorRate critical на s: 34%", "інц-2")
+
+    assert order == [("памʼять після публікації", 2)], \
+        "контекст має бути готовий уже в момент публікації звіту"

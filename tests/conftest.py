@@ -31,6 +31,11 @@ def isolated_state(monkeypatch, tmp_path):
     # між прогонами і тести починають бачити чужі повідомлення
     checkpoint.saver.cache_clear()
     monkeypatch.setattr(checkpoint, "CHECKPOINT_DB", tmp_path / "checkpoints.sqlite")
+    # app.supervisor створюється при імпорті модуля, тому підміни шляху йому замало —
+    # без перезбирання графа тести пишуть у справжню базу і бачать стан минулих прогонів
+    from agents.supervisor import build_supervisor
+
+    monkeypatch.setattr(app_module, "supervisor", build_supervisor())
     # Жарт — оздоблення, а не частина потоку інциденту: тести цього потоку не мають
     # ламатись від зміни списку жартів. test_jokes вмикає їх у себе явно.
     monkeypatch.setattr(jokes, "JOKES_ENABLED", False)

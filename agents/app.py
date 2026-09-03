@@ -49,9 +49,12 @@ def _investigate_and_post(summary: str, thread_id: str) -> None:
     published: dict = {}
 
     def publish(report) -> None:
-        published["reference"] = post_slack.invoke(
-            {"thread_id": thread_id,
-             "text": render_report({"report": report, "revisions": 0, "verdict": None})})
+        rendered = render_report({"report": report, "revisions": 0, "verdict": None})
+        published["reference"] = post_slack.invoke({"thread_id": thread_id, "text": rendered})
+        # Пам'ять треда наповнюється РАЗОМ з публікацією, а не після критика.
+        # Людина починає питати щойно побачила звіт — а це на 20-40 секунд раніше,
+        # ніж критик закінчить. У тому вікні контекст мусить уже бути.
+        _remember_investigation(thread_id, summary, rendered)
 
     outcome = investigate({"summary": summary, "service": _service_from(summary)},
                           config=trace_config(thread_id, tags=["sre-agent"]),
@@ -64,11 +67,14 @@ def _investigate_and_post(summary: str, thread_id: str) -> None:
 
     # Звіт уже в треді — дописуємо його на місці, а не додаємо нових повідомлень:
     # вердикт критика і виправлення після нього це той самий звіт у кращій редакції.
-    rendered = render_report(outcome)
     reference = published.get("reference")
     if reference:
-        edit_message(reference, rendered)
-    _remember_investigation(thread_id, summary, rendered)
+        edit_message(reference, render_report(outcome))
+    if outcome["revisions"]:
+        # звіт уже в пам'яті; після доопрацювання дописуємо лише що змінилось,
+        # інакше в контексті треда лежали б дві майже однакові копії
+        _remember_note(thread_id,
+                       f"Звіт уточнено після критики: {outcome['report'].hypothesis}")
     _annotate(_service_from(summary), outcome["report"].hypothesis)
 
 
@@ -85,6 +91,12 @@ def _remember_investigation(thread_id: str, question: str, report: str) -> None:
         {"messages": [{"role": "user", "content": question},
                       {"role": "assistant", "content": report}],
          "intent": "ALERT", "service": _service_from(question)})
+
+
+def _remember_note(thread_id: str, note: str) -> None:
+    """Дописує коротку примітку в пам'ять треда."""
+    supervisor.update_state({"configurable": {"thread_id": thread_id}},
+                            {"messages": [{"role": "assistant", "content": note}]})
 
 
 def _service_from(summary: str) -> str:
