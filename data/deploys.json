@@ -110,5 +110,12 @@
     "author": "demo",
     "commit": "deadbee",
     "ts": "2026-09-03T20:00:26Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T20:08:28Z"
   }
 ]

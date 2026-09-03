@@ -22,9 +22,14 @@ def isolated_state(monkeypatch, tmp_path):
     fingerprint у робочий файл і на другому запуску сам себе відфільтрував.
     """
     import agents.app as app_module
+    import agents.checkpoint as checkpoint
     import agents.tools.actions as actions
     from agents.tools import slack
 
+    # чекпойнтер теж пише на диск: без ізоляції історія тредів накопичується
+    # між прогонами і тести починають бачити чужі повідомлення
+    checkpoint.saver.cache_clear()
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_DB", tmp_path / "checkpoints.sqlite")
     monkeypatch.setattr(app_module, "PROCESSED", tmp_path / "processed_alerts.json")
     monkeypatch.setattr(app_module, "SLACK_FILE", tmp_path / "slack_threads.json")
     monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack_threads.json")
