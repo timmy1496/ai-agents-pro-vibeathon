@@ -56,3 +56,26 @@ def test_grafana_unavailable_is_reported_not_raised(monkeypatch):
     monkeypatch.setattr(actions, "_post", boom)
     assert "недоступна" in actions.create_annotation.invoke(
         {"service": "demo-chaos-svc", "text": "розслідування"})["error"]
+
+
+def test_edit_message_rewrites_in_file_emulation(tmp_path, monkeypatch):
+    """Без токена редагування має працювати так само — інакше тести розходяться з проду."""
+    import agents.tools.actions as actions
+
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
+    reference = actions.post_slack.invoke({"thread_id": "T1", "text": "перша редакція"})
+    actions.edit_message(reference, "друга редакція")
+
+    thread = json.loads((tmp_path / "slack.json").read_text())["T1"]
+    assert len(thread) == 1, "редагування не має додавати повідомлень"
+    assert thread[0]["text"] == "друга редакція"
+
+
+def test_edit_message_uses_chat_update_when_slack_is_on(monkeypatch, tmp_path):
+    import agents.tools.actions as actions
+    from agents.tools import slack
+
+    calls = []
+    monkeypatch.setattr(slack, "update", lambda channel, ts, text: calls.append((channel, ts)))
+    actions.edit_message({"transport": "slack", "channel": "C1", "ts": "1700.1"}, "нова")
+    assert calls == [("C1", "1700.1")]

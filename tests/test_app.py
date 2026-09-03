@@ -148,3 +148,32 @@ def test_a_new_firing_after_resolution_is_a_new_incident(client):
 
     assert again["accepted"] == 1, "нове загоряння — новий інцидент"
     assert again["threads"][0] != first["threads"][0], "і новий тред"
+
+
+def test_incident_thread_ends_with_exactly_two_messages(monkeypatch, tmp_path):
+    """Алерт і звіт. Вердикт критика дописується у звіт, а не додає третє повідомлення."""
+    import agents.app as app_module
+    import agents.tools.actions as actions
+    from agents.incident_agent import Evidence, RCAReport, Verdict
+
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
+    monkeypatch.setattr(app_module, "_annotate", lambda service, text: None)
+
+    report = RCAReport(service="demo-chaos-svc", root_cause_label="release",
+                       hypothesis="регресія в v1.5.0", confidence=0.93,
+                       evidence=[Evidence(fact="error rate 34%", source="PromQL")],
+                       recommended_actions=["відкотити"])
+
+    def fake_investigate(alert, config=None, on_report=None, **kwargs):
+        on_report(report)  # звіт публікується одразу
+        return {"report": report, "verdict": Verdict(grounded=True, verdict="ACCEPT"),
+                "revisions": 0, "state": {"messages": []}}
+
+    monkeypatch.setattr("agents.incident_agent.investigate", fake_investigate)
+    app_module._process_alert("HighErrorRate critical на demo-chaos-svc: 34%", "t1")
+
+    thread = json.loads((tmp_path / "slack.json").read_text())["t1"]
+    assert len(thread) == 2, f"мало бути алерт і звіт, а не {len(thread)}"
+    assert thread[0]["text"].startswith(":rotating_light:")
+    assert "критик" in thread[1]["text"], "вердикт має опинитись усередині звіту"
+    assert "регресія в v1.5.0" in thread[1]["text"]

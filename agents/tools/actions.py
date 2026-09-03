@@ -91,3 +91,22 @@ def propose_action(service: str, action: str, reason: str, command: str = "") ->
                 "command": command}
     return {"status": "awaiting_human_approval", "service": service,
             "action": action, "reason": reason, "command": command}
+
+
+def edit_message(reference: dict, text: str) -> dict:
+    """Переписує повідомлення, яке раніше опублікував post_slack.
+
+    Приймає той самий словник, що повернув post_slack, тому працює однаково і для
+    реального Slack, і для файлової емуляції.
+    """
+    if reference.get("transport") == "slack":
+        return slack.update(reference["channel"], reference["ts"], text)
+
+    thread_id = reference["thread_id"]
+    threads = json.loads(SLACK_FILE.read_text()) if SLACK_FILE.exists() else {}
+    messages = threads.get(thread_id)
+    if not messages:
+        return {"error": "немає що переписувати"}
+    messages[-1]["text"] = text
+    SLACK_FILE.write_text(json.dumps(threads, indent=2, ensure_ascii=False) + "\n")
+    return {"updated": True, "thread_id": thread_id, "transport": "file"}

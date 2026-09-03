@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from agents.observability import trace_config
 from agents.config import DATA_DIR
 from agents.supervisor import build_supervisor
-from agents.tools.actions import SLACK_FILE, create_annotation, post_slack
+from agents.tools.actions import SLACK_FILE, create_annotation, edit_message, post_slack
 
 PROCESSED = DATA_DIR / "processed_alerts.json"
 
@@ -46,13 +46,12 @@ def _investigate_and_post(summary: str, thread_id: str) -> None:
     from agents.incident_agent import investigate
     from agents.supervisor import render_report
 
-    posted: dict = {}
+    published: dict = {}
 
     def publish(report) -> None:
-        posted["report"] = report
-        post_slack.invoke({"thread_id": thread_id,
-                           "text": render_report({"report": report, "revisions": 0,
-                                                  "verdict": None})})
+        published["reference"] = post_slack.invoke(
+            {"thread_id": thread_id,
+             "text": render_report({"report": report, "revisions": 0, "verdict": None})})
 
     outcome = investigate({"summary": summary, "service": _service_from(summary)},
                           config=trace_config(thread_id, tags=["sre-agent"]),
@@ -63,13 +62,11 @@ def _investigate_and_post(summary: str, thread_id: str) -> None:
                            "text": f":warning: звіт не завершено: {outcome['error']}"})
         return
 
-    verdict = outcome["verdict"]
-    if outcome["revisions"] and outcome["report"] is not posted.get("report"):
-        post_slack.invoke({"thread_id": thread_id, "text": "Уточнений звіт після критики:\n"
-                                                           + render_report(outcome)})
-    else:
-        mark = "ok" if verdict and verdict.grounded else "є зауваження"
-        post_slack.invoke({"thread_id": thread_id, "text": f"_критик: {mark}_"})
+    # Звіт уже в треді — дописуємо його на місці, а не додаємо нових повідомлень:
+    # вердикт критика і виправлення після нього це той самий звіт у кращій редакції.
+    reference = published.get("reference")
+    if reference:
+        edit_message(reference, render_report(outcome))
     _annotate(_service_from(summary), outcome["report"].hypothesis)
 
 
