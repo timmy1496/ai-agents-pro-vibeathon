@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: sre-agent
+    type: file
+    updateIntervalSeconds: 10
+    # allowUiUpdates, щоб дашборд можна було підкрутити прямо на демо, не перезбираючи стенд
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

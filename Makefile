@@ -1,4 +1,4 @@
-.PHONY: up down ps logs incident-1 incident-2 incident-3 reset selfcheck urls
+.PHONY: up down ps logs incident-1 incident-2 incident-3 reset selfcheck urls doctor doctor-warm demo
 
 up:            ## Підняти стенд
 	docker compose up -d --build
@@ -25,6 +25,15 @@ incident-3:    ## Memory leak -> OOMKilled (root cause: ресурси)
 reset:         ## Зняти chaos і перезапустити демо-сервіс
 	./scripts/incident.sh reset
 
+doctor:        ## Чи готовий стенд до демо (правила, логи, KB, токен, ключ)
+	.venv/bin/python -m scripts.doctor
+
+doctor-warm:   ## Те саме + прогріти ембеддер і індекс KB (перед демо — обов'язково)
+	.venv/bin/python -m scripts.doctor --warm
+
+demo:          ## Наскрізний сценарій демо: 5 агентів, HITL, евали, тиха деградація
+	./scripts/demo.sh
+
 selfcheck:     ## Self-check chaos-svc без стенду
 	cd services/chaos-svc && python3 -m pip install -q -r requirements.txt httpx && python3 app.py
 
@@ -36,6 +45,10 @@ urls:
 	@echo "Qdrant        http://localhost:6333/dashboard"
 	@echo "chaos-svc     http://localhost:8080"
 	@echo "Langfuse      http://localhost:3001 (demo@example.com / demodemo123)"
+	@echo "Агент         http://localhost:8000 (треди) — make agent"
+	@echo "Дашборд       http://localhost:3000/d/sre-agent-golden"
+	@echo ""
+	@echo "Перед демо:   make doctor-warm"
 
 .PHONY: install kb-index test
 install:       ## Віртуальне оточення і залежності

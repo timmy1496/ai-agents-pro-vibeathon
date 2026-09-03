@@ -37,6 +37,14 @@ LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "sk-lf-demo")
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "1") not in ("0", "false", "")
 KB_COLLECTION = os.getenv("KB_COLLECTION", "sre_kb")
 
+# Куди fastembed кладе ONNX-моделі. Дефолт бібліотеки — $TMPDIR/fastembed_cache, а це
+# на macOS тека, яку система періодично прибирає: 2 ГБ e5-large тихо зникають, і
+# наступний старт агента стоїть кілька хвилин, качаючи їх заново — зазвичай саме тоді,
+# коли цього найменше хочеться. Пінимо в стабільне місце (той самий шлях кешує CI).
+os.environ.setdefault("FASTEMBED_CACHE_PATH",
+                      str(pathlib.Path.home() / ".cache" / "fastembed"))
+FASTEMBED_CACHE = pathlib.Path(os.environ["FASTEMBED_CACHE_PATH"])
+
 # Локальні ONNX-моделі через fastembed: без API-викликів, працює офлайн.
 # e5-large (1024d, 2.24GB) а не MiniLM (384d, 0.22GB) — виміряно, не за відчуттям:
 # на MiniLM "інциденти з OOMKilled" дає косинус 0.208, а "політика відпусток" 0.238,
