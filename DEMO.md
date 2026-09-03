@@ -14,7 +14,26 @@ make reset         # чистий старт
 make slack-check   # має написати "Slack готовий до демо"
 ```
 
-Вкладки: **Slack `#sre-agent`** (головний екран) · [Grafana](http://localhost:3000/d/demo-chaos-svc) (admin/admin) · [Prometheus Alerts](http://localhost:9090/alerts)
+### Доступи й посилання
+
+| Система | Посилання | Вхід |
+|---|---|---|
+| **Slack** `#sre-agent` | воркспейс The orchestrators | твій акаунт; бот `@SRE Agent` |
+| **Grafana** — дашборд демо | http://localhost:3000/d/demo-chaos-svc | `admin` / `admin` |
+| **Langfuse** — трейси й вартість | http://localhost:3001 | `demo@example.com` / `demodemo123` |
+| Prometheus — алерти | http://localhost:9090/alerts | без пароля |
+| Alertmanager | http://localhost:9093 | без пароля |
+| Qdrant — база знань | http://localhost:6333/dashboard | без пароля |
+| Агент — треди й API | http://localhost:8000 | без пароля |
+| Демо-сервіс | http://localhost:8080 | без пароля |
+
+Loki власного UI не має — логи дивись у Grafana → Explore → джерело Loki,
+запит `{service="demo-chaos-svc"}`.
+
+У Langfuse проєкт `sre-agent` створюється автоматично, ключі API: `pk-lf-demo` / `sk-lf-demo`.
+Трейс інциденту шукай за `session_id`, що дорівнює ідентифікатору треда.
+
+Відкрий заздалегідь: **Slack** (головний екран), **Grafana**, **Langfuse**.
 
 Перед показом дай стенду постояти 10 хвилин: після рестартів контейнерів горить
 `FrequentRestarts`, і в каналі буде зайвий шум.
@@ -33,6 +52,7 @@ make slack-check   # має написати "Slack готовий до демо
 | 1:45–2:15 | чекаєш, коментуєш | **у тред** падає звіт RCA | — |
 | 2:15 | читаєш звіт | — | див. нижче |
 | 3:00 | пишеш у тред `@SRE Agent а чи було таке раніше?` | відповідь у той самий тред | «Тред інциденту — це й пам'ять діалогу. Можна перепитувати.» |
+| 3:15 | відкриваєш **Langfuse** | дерево трейсу: supervisor → agent → tool, токени й вартість | «Видно кожен крок і скільки коштував інцидент.» |
 | 3:30 | `make test` | 178 тестів, ~48 с | «Без docker, без Slack, без API-ключа.» |
 | 4:00 | `make demo-degradation` | тести червоніють | див. нижче |
 | 4:30 | `make reset` | за ~16 с алерт гасне, у тред падає `✅ вирішено` | «Закриття інциденту — один рядок, без нового розслідування.» |
