@@ -23,6 +23,11 @@ LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "http://localhost:3001")
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "pk-lf-demo")
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "sk-lf-demo")
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "1") not in ("0", "false", "")
+
+# Slack. Є токен — пишемо в реальний workspace, немає — у файл-емуляцію.
+# Перемикача немає навмисно: зайвий прапорець, який завжди дорівнює "чи є токен".
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
+SLACK_CHANNEL = os.getenv("SLACK_CHANNEL", "#sre-agent")
 KB_COLLECTION = os.getenv("KB_COLLECTION", "sre_kb")
 
 # Локальні ONNX-моделі через fastembed: без API-викликів, працює офлайн.

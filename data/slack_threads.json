@@ -13,6 +13,10 @@
     {
       "author": "sre-agent",
       "text": ":rotating_light: HighLatencyP95 warning на podinfo-a: podinfo-a: p95 latency 1.0749999999999955s (>1s)"
+    },
+    {
+      "author": "sre-agent",
+      "text": ":rotating_light: HighLatencyP95 warning на podinfo-a: podinfo-a: p95 latency 2.0999999999999996s (>1s)"
     }
   ],
   "239c42e4a2114b6a": [
@@ -27,6 +31,10 @@
     {
       "author": "sre-agent",
       "text": "*podinfo-b* — гіпотеза: Активний критичний алерт FrequentRestarts (4 рестарти за 10 хв) супроводжується зростанням p95 latency вище baseline. Прямих доказів причини рестартів (OOMKilled, деплой, помилки в логах) не знайдено — k8s_events і get_deploys не повернули даних, а логи error/warn порожні. Достатніх підстав для конкретного класу причини (resources/release/dependency/capacity/config) немає.\nКлас причини: `unknown`, впевненість 15%\n\n*Докази:*\n• Активний критичний алерт FrequentRestarts: 4 рестарти за 10 хв, з 2026-09-03T15:51:56Z\n  _get_active_alerts(service=podinfo-b)_\n• latency_p95 current_avg=2.0023s, current_max=10.0s, baseline_avg=1.0785s\n  _golden_signals(service=podinfo-b): latency_p95_\n• restarts current_avg=5.4262, current_max=8.0, baseline_avg=2.4854 — почастішання рестартів проти baseline\n  _golden_signals(service=podinfo-b): restarts_\n• changes(process_start_time_seconds{service=\"podinfo-b\"}[10m]) за 180 хв: avg=1.7952, max=8.0, last=5.0 — підтверджує нестабільну кількість рестартів у часі\n  _query_prometheus(changes(process_start_time_seconds{service=\"podinfo-b\"}[10m]), 180m)_\n• memory_bytes (golden_signals, 30 хв): current_avg=25343172.0851, current_max=29319168.0, baseline_avg=23861299.6303 — незначне зростання проти baseline, без ознак різкого падіння\n  _golden_signals(service=podinfo-b): memory_bytes_\n• process_resident_memory_bytes за 180 хв: min=16392192.0, max=29069312.0, avg=23283633.2308, last=24940544.0 — коливання в межах ~16-29MB без чіткого монотонного росту (leak) чи стабільного плато\n  _query_prometheus(process_resident_memory_bytes{service=\"podinfo-b\"}, 180m)_\n• У логах error та warn немає жодних записів за 30-60 хв (total_lines=0) — рестарти не супроводжуються видимими помилками застосунку\n  _query_loki_patterns(service=podinfo-b, level=error, minutes=30) та level=warn, minutes=60_\n• Пошук по підрядку 'kill' у логах не дав результатів (matched=0) — немає прямих згадок OOMKilled/kill у логах застосунку\n  _query_loki_logs(service=podinfo-b, contains='kill', minutes=180)_\n• get_deploys(service=podinfo-b) для 6h/12h/24h не повернув структурованих даних про релізи — кореляцію з деплоєм підтвердити чи заперечити неможливо\n  _get_deploys(service=podinfo-b, hours=6/12/24)_\n• k8s_events(service=podinfo-b) для 6h/12h/24h не повернув подій (OOMKilled/BackOff/Killing) — підтвердити причину рестартів на рівні кластера неможливо\n  _k8s_events(service=podinfo-b, hours=6/12/24)_\n• rps current_avg=0.1858, baseline_avg=0.1788 — навантаження стабільне, без стрибка\n  _golden_signals(service=podinfo-b): rps_\n\n*Рекомендовані дії:*\n1. Повторно і надійно виконати k8s_events для podinfo-b (можливо, через інший канал/тайм-аут) — цільово шукати OOMKilled, BackOff, Killing, оскільки цей інструмент є першим кроком runbook 'oomkilled-restarts.md' і в цій сесії відповіді не отримано\n2. Повторно виконати get_deploys для podinfo-b, щоб перевірити кореляцію початку рестартів (~15:51 UTC) з релізом у межах 15 хв\n3. Побудувати графік process_resident_memory_bytes за довше вікно (декілька годин/днів) вручну в Grafana, щоб візуально відрізнити пилку (leak) від плато біля ліміту — поточні агреговані min/avg/max (16.4-29.1MB) недостатні для цього висновку\n4. Перевірити логи застосунку безпосередньо перед моментами рестартів (не лише error/warn рівні за останні 30-60 хв) — можливо, потрібне інше вікно часу навколо 15:51-16:00 UTC\n5. Після отримання підтверджених даних (OOMKilled у k8s_events або кореляція з деплоєм) — повторно класифікувати root_cause і застосувати відповідні дії з runbook kb/runbooks/oomkilled-restarts.md (rollback+профілювання при leak, або підняття resources.limits.memory при замалому ліміті)\n\n*Схожі інциденти:* kb/runbooks/oomkilled-restarts.md\n\n_критик: ok, доопрацювань: 1_"
+    },
+    {
+      "author": "sre-agent",
+      "text": ":rotating_light: HighLatencyP95 warning на podinfo-b: podinfo-b: p95 latency 2.0999999999999996s (>1s)"
     }
   ],
   "473522ec840f7c8a": [
@@ -43,6 +51,16 @@
     {
       "author": "sre-agent",
       "text": ":rotating_light: FrequentRestarts critical на demo-chaos-svc: demo-chaos-svc: 3 restarts in 10m"
+    },
+    {
+      "author": "sre-agent",
+      "text": ":rotating_light: FrequentRestarts critical на demo-chaos-svc: demo-chaos-svc: 3 restarts in 10m"
+    }
+  ],
+  "da7a38ed2509934b": [
+    {
+      "author": "sre-agent",
+      "text": ":rotating_light: HighLatencyP95 warning на demo-chaos-svc: demo-chaos-svc: p95 latency 4.247881601787144s (>1s)"
     }
   ]
 }

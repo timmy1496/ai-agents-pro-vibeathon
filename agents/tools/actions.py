@@ -14,6 +14,7 @@ import urllib.request
 from langchain_core.tools import tool
 
 from agents.config import DATA_DIR, GRAFANA_AUTH, GRAFANA_URL
+from agents.tools import slack
 
 SLACK_FILE = DATA_DIR / "slack_threads.json"
 
@@ -33,17 +34,36 @@ def _post(url: str, payload: dict, headers: dict) -> dict:
         return json.loads(response.read() or b"{}")
 
 
+def _post_to_file(thread_id: str, text: str) -> dict:
+    """Емуляція Slack: той самий формат повідомлень, але у файлі.
+
+    Лишається запасним шляхом, коли токена немає — щоб демо і тести не залежали
+    від наявності реального workspace.
+    """
+    threads = json.loads(SLACK_FILE.read_text()) if SLACK_FILE.exists() else {}
+    threads.setdefault(thread_id, []).append({"author": "sre-agent", "text": text})
+    SLACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SLACK_FILE.write_text(json.dumps(threads, indent=2, ensure_ascii=False) + "\n")
+    return {"posted": True, "thread_id": thread_id, "messages_in_thread": len(threads[thread_id]),
+            "transport": "file"}
+
+
 @tool
 def post_slack(thread_id: str, text: str) -> dict:
     """Публікує повідомлення у Slack-тред інциденту.
 
-    Стенд емулює Slack файлом data/slack_threads.json — формат повідомлення той самий,
-    тому перехід на реальний workspace не змінює виклик.
+    Є SLACK_BOT_TOKEN — пише в реальний workspace, немає — у файл-емуляцію.
+    Виклик однаковий в обох випадках; тред інциденту в обох випадках один.
     """
-    threads = json.loads(SLACK_FILE.read_text()) if SLACK_FILE.exists() else {}
-    threads.setdefault(thread_id, []).append({"author": "sre-agent", "text": text})
-    SLACK_FILE.write_text(json.dumps(threads, indent=2, ensure_ascii=False) + "\n")
-    return {"posted": True, "thread_id": thread_id, "messages_in_thread": len(threads[thread_id])}
+    if slack.enabled():
+        result = slack.post(thread_id, text)
+        if "error" not in result:
+            return {**result, "thread_id": thread_id, "transport": "slack"}
+        # Slack недоступний або бракує прав — інцидент важливіший за канал доставки,
+        # тому пишемо у файл і повертаємо причину, а не втрачаємо звіт
+        return {**_post_to_file(thread_id, text), "slack_error": result["error"],
+                "hint": result.get("hint", "")}
+    return _post_to_file(thread_id, text)
 
 
 @tool

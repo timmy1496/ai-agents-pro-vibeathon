@@ -61,3 +61,7 @@ agent:         ## Запустити агента (вебхук Alertmanager + �
 .PHONY: demo-degradation
 demo-degradation:  ## Демо тихої деградації: змінили формат логів -> гейт червоніє
 	.venv/bin/python -m pytest tests/test_degradation.py -v
+
+.PHONY: slack-check
+slack-check:   ## Перевірити Slack: токен, канал, права, тред
+	.venv/bin/python -m scripts.slack_check
