@@ -13,6 +13,7 @@ def client(monkeypatch, tmp_path):
     slack = tmp_path / "slack.json"
     monkeypatch.setattr(actions, "SLACK_FILE", slack)
     monkeypatch.setattr(app_module, "SLACK_FILE", slack)
+    monkeypatch.setattr(app_module, "PROCESSED", tmp_path / "processed.json")
     monkeypatch.setattr(app_module, "_handle",
                         lambda text, thread_id: actions.post_slack.invoke(
                             {"thread_id": thread_id, "text": f"звіт по: {text}"}) and "готово")
@@ -27,7 +28,8 @@ def test_webhook_accepts_alert_and_opens_thread(client):
         "annotations": {"summary": "error rate 34%"},
     }]})
 
-    assert response.json() == {"accepted": 1, "threads": ["abc123"]}
+    assert response.json()["accepted"] == 1
+    assert response.json()["threads"] == ["abc123"]
     thread = json.loads(slack.read_text())["abc123"]
     assert ":rotating_light:" in thread[0]["text"], "алерт має з'явитись у треді одразу"
     assert "HighErrorRate" in thread[0]["text"] and "demo-chaos-svc" in thread[0]["text"]
@@ -97,3 +99,51 @@ def test_incident_id_without_fingerprint_still_works(client):
 
     generated = _incident_id({}, {"alertname": "A", "service": "s"})
     assert generated == "A-s", "без fingerprint і startsAt лишається читабельний ключ"
+
+
+def alert(fingerprint="abc", status="firing", started="2026-09-03T10:00:00.000Z"):
+    return {"fingerprint": fingerprint, "status": status, "startsAt": started,
+            "labels": {"alertname": "HighErrorRate", "severity": "critical",
+                       "service": "demo-chaos-svc"},
+            "annotations": {"summary": "error rate 34%"}}
+
+
+def test_repeated_notification_of_the_same_incident_is_ignored(client):
+    """Alertmanager повторює нотифікацію кожен repeat_interval, поки алерт горить.
+
+    Без дедуплікації в тред щохвилини падав би новий звіт RCA.
+    """
+    http, slack = client
+
+    first = http.post("/webhook/alert", json={"alerts": [alert()]}).json()
+    second = http.post("/webhook/alert", json={"alerts": [alert()]}).json()
+
+    assert first["accepted"] == 1 and first["skipped_duplicates"] == 0
+    assert second["accepted"] == 0 and second["skipped_duplicates"] == 1
+
+    thread = json.loads(slack.read_text())[first["threads"][0]]
+    assert len(thread) == 2, f"мало бути алерт + звіт, а не {len(thread)} повідомлень"
+
+
+def test_resolution_adds_one_line_not_a_new_investigation(client):
+    http, slack = client
+
+    firing = http.post("/webhook/alert", json={"alerts": [alert()]}).json()
+    http.post("/webhook/alert", json={"alerts": [alert(status="resolved")]})
+
+    thread = json.loads(slack.read_text())[firing["threads"][0]]
+    assert "вирішено" in thread[-1]["text"]
+    assert sum("звіт по" in m["text"] for m in thread) == 1, \
+        "закриття інциденту не має запускати розслідування наново"
+
+
+def test_a_new_firing_after_resolution_is_a_new_incident(client):
+    http, slack = client
+
+    first = http.post("/webhook/alert", json={"alerts": [alert()]}).json()
+    http.post("/webhook/alert", json={"alerts": [alert(status="resolved")]})
+    again = http.post("/webhook/alert",
+                      json={"alerts": [alert(started="2026-09-03T14:00:00.000Z")]}).json()
+
+    assert again["accepted"] == 1, "нове загоряння — новий інцидент"
+    assert again["threads"][0] != first["threads"][0], "і новий тред"

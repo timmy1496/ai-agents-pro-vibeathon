@@ -15,6 +15,23 @@ def no_real_slack(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_state(monkeypatch, tmp_path):
+    """Жоден тест не пише у справжній data/ проєкту.
+
+    Інакше стан протікає між прогонами: тест, що дедуплікує алерти, записав свій
+    fingerprint у робочий файл і на другому запуску сам себе відфільтрував.
+    """
+    import agents.app as app_module
+    import agents.tools.actions as actions
+    from agents.tools import slack
+
+    monkeypatch.setattr(app_module, "PROCESSED", tmp_path / "processed_alerts.json")
+    monkeypatch.setattr(app_module, "SLACK_FILE", tmp_path / "slack_threads.json")
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack_threads.json")
+    monkeypatch.setattr(slack, "THREAD_MAP", tmp_path / "slack_thread_map.json")
+
+
+@pytest.fixture(autouse=True)
 def no_real_models(monkeypatch, request):
     """Тести не мають права звертатись до реальної моделі.
 

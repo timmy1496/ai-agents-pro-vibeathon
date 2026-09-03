@@ -13,8 +13,11 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from agents.observability import trace_config
+from agents.config import DATA_DIR
 from agents.supervisor import build_supervisor
 from agents.tools.actions import SLACK_FILE, post_slack
+
+PROCESSED = DATA_DIR / "processed_alerts.json"
 
 app = FastAPI(title="SRE Agent")
 supervisor = build_supervisor()  # один checkpointer на процес: треди живуть між запитами
@@ -47,15 +50,44 @@ async def alertmanager_webhook(payload: dict, background: BackgroundTasks) -> di
     триває десятки секунд. Тому підтверджуємо прийом, а не результат.
     """
     alerts = payload.get("alerts", [])
-    threads = []
+    threads, skipped = [], 0
     for alert in alerts:
         labels = alert.get("labels", {})
+        status = alert.get("status", "firing")
         thread_id = _incident_id(alert, labels)
+        if _already_handled(thread_id, status):
+            skipped += 1
+            continue
+
         summary = (f"{labels.get('alertname')} {labels.get('severity')} на "
                    f"{labels.get('service')}: {alert.get('annotations', {}).get('summary', '')}")
-        background.add_task(_process_alert, summary, thread_id)
+        if status == "resolved":
+            # закриття інциденту — це один рядок у тред, а не привід розслідувати наново
+            background.add_task(post_slack.invoke,
+                                {"thread_id": thread_id,
+                                 "text": f":white_check_mark: {labels.get('alertname')} "
+                                         f"на {labels.get('service')} — вирішено"})
+        else:
+            background.add_task(_process_alert, summary, thread_id)
         threads.append(thread_id)
-    return {"accepted": len(alerts), "threads": threads}
+    return {"accepted": len(threads), "skipped_duplicates": skipped, "threads": threads}
+
+
+def _already_handled(incident_id: str, status: str) -> bool:
+    """Чи вже опрацьовано цей інцидент у цьому статусі.
+
+    Alertmanager повторює нотифікацію кожен repeat_interval, поки алерт горить — це
+    правильно з його боку (якщо агент лежав, повтор донесе алерт). Але для нас другий
+    вебхук про той самий інцидент не є новиною: без цієї перевірки в тред щохвилини
+    падав би новий звіт RCA. Стан на диску, щоб переживати рестарт агента.
+    """
+    processed = json.loads(PROCESSED.read_text()) if PROCESSED.exists() else {}
+    if processed.get(incident_id) == status:
+        return True
+    processed[incident_id] = status
+    PROCESSED.parent.mkdir(parents=True, exist_ok=True)
+    PROCESSED.write_text(json.dumps(processed, indent=2) + "\n")
+    return False
 
 
 def _incident_id(alert: dict, labels: dict) -> str:
