@@ -11,6 +11,12 @@ route:
 receivers:
   - name: sre-agent
     webhook_configs:
-      # агент бігає на хості (uvicorn app:api --port 8000)
+      # агент бігає на хості (make agent -> uvicorn на :8000)
       - url: http://host.docker.internal:8000/webhook/alert
         send_resolved: true
+        # Вхід агента закритий спільним секретом. Значення має збігатись з AGENT_TOKEN
+        # у .env; дефолт демонстраційний і задокументований у README.
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: sre-demo-token

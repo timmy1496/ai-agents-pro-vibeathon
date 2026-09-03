@@ -22,6 +22,37 @@ MAX_LOG_LINES = 2000     # стеля вибірки з Loki; у промпт і
 MAX_SAMPLES = 3          # скільки прикладів рядків на патерн віддаємо
 HTTP_TIMEOUT = 10
 
+# Селектори збирає модель, яка щойно прочитала недовірені логи, тому все, що приходить
+# від неї, потрапляє в запит лише через ці дві функції.
+#
+# Ім'я сервісу — не рядок, а ідентифікатор: валідуємо за алфавітом і не екрануємо взагалі
+# (екранування дало б працездатний запит з неочікуваним значенням, а тут потрібна відмова).
+SERVICE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,62}$")
+
+
+class UnsafeSelector(ValueError):
+    """Аргумент не проходить у селектор — запит не будується взагалі."""
+
+
+def _label(service: str) -> str:
+    """Ім'я сервісу, придатне для мітки селектора. Інакше — відмова, не санітизація."""
+    if not SERVICE_NAME.match(service or ""):
+        raise UnsafeSelector(f"недопустиме ім'я сервісу: {service!r}")
+    return service
+
+
+def _literal(value: str) -> str:
+    r"""Рядковий літерал LogQL у подвійних лапках з Go-екрануванням.
+
+    Backtick-літерал (`|= \`...\``) екранування не має в принципі: перший же backtick
+    у значенні закриває рядок, а далі йде вже синтаксис запиту. Тому підрядок для
+    пошуку йде тільки сюди.
+    """
+    escaped = (value.replace("\\", "\\\\").replace('"', '\\"')
+               .replace("\n", "\\n").replace("\r", "\\r"))
+    return f'"{escaped}"'
+
+
 # Нормалізація рядка в патерн: числа, id, ip і лапки — це змінна частина повідомлення.
 NOISE = [
     (re.compile(r"\b[0-9a-f]{8,}\b", re.I), "<hex>"),
@@ -38,9 +69,15 @@ def _get(url: str, params: dict) -> dict:
         return json.loads(response.read())
 
 
-def _window(minutes: int) -> tuple[int, int]:
+def _window(minutes: int, ends_minutes_ago: int = 0) -> tuple[int, int]:
+    """Вікно завдовжки `minutes`, що закінчується `ends_minutes_ago` хвилин тому.
+
+    Другий аргумент і є те, що робить baseline справжнім baseline: без нього
+    «вікно до інциденту» вийшло б вікном, яке інцидент у себе включає.
+    """
     now = int(time.time())
-    return now - minutes * 60, now
+    end = now - ends_minutes_ago * 60
+    return end - minutes * 60, end
 
 
 def _series_summary(result: list[dict]) -> list[dict]:
@@ -60,29 +97,44 @@ def _series_summary(result: list[dict]) -> list[dict]:
 
 
 @tool
-def query_prometheus(query: str, minutes: int = 60, step: str = "30s") -> dict:
+def query_prometheus(query: str, minutes: int = 60, step: str = "30s",
+                     ends_minutes_ago: int = 0) -> dict:
     """Довільний PromQL за вікно в N хвилин. Повертає агрегати ряду (min/max/avg/last).
+
+    ends_minutes_ago зсуває вікно в минуле: 0 — до «зараз», 30 — вікно, що закінчилось
+    пів години тому. Так беруть зріз ДО інциденту, не зачепивши сам інцидент.
 
     Приклади:
       sum by (service) (rate(http_requests_total{status=~"5.."}[1m]))
       histogram_quantile(0.95, sum by (service, le) (rate(http_request_duration_seconds_bucket[2m])))
     """
-    start, end = _window(minutes)
+    start, end = _window(minutes, ends_minutes_ago)
     payload = _get(f"{PROMETHEUS_URL}/api/v1/query_range",
                    {"query": query, "start": start, "end": end, "step": step})
     if payload.get("status") != "success":
         return {"error": payload.get("error", "prometheus query failed"), "query": query}
     return {"query": query, "window_minutes": minutes,
+            "ends_minutes_ago": ends_minutes_ago,
             "series": _series_summary(payload["data"]["result"])}
 
 
 @tool
-def golden_signals(service: str, minutes: int = 30, baseline_offset_minutes: int = 60) -> dict:
-    """Golden signals сервісу за вікно ПЛЮС той самий зріз годину тому для порівняння.
+def golden_signals(service: str, minutes: int = 30, baseline_minutes: int = 60) -> dict:
+    """Golden signals сервісу за вікно ПЛЮС той самий зріз ДО нього для порівняння.
 
     Один виклик замість чотирьох: error rate, p95, RPS, рестарти, пам'ять — і дельта
     до baseline. Абсолютні числа без baseline нічого не кажуть, тому вони тут разом.
+
+    Два вікна не перетинаються, і це принципово (бриф A4: baseline = година до деплою,
+    window = 15 хв після):
+        current  = [now - minutes, now]
+        baseline = [now - minutes - baseline_minutes, now - minutes]
+    Раніше baseline брався ширшим вікном від «зараз» — тобто включав у себе сам
+    інцидент і тягнув середнє вгору. Ratio виходив систематично заниженим, і A4 на
+    tier-3 (поріг error_rate 5.0) промахувався рівно на порозі: чиста деградація
+    0 -> 0.5 давала рівно 5.0 і порогу не пробивала.
     """
+    service = _label(service)
     queries = {
         "error_rate": f'sum(rate(http_requests_total{{service="{service}",status=~"5.."}}[1m]))'
                       f' / clamp_min(sum(rate(http_requests_total{{service="{service}"}}[1m])), 0.001)',
@@ -95,7 +147,8 @@ def golden_signals(service: str, minutes: int = 30, baseline_offset_minutes: int
     signals = {}
     for name, promql in queries.items():
         now = query_prometheus.func(promql, minutes=minutes)
-        before = query_prometheus.func(promql, minutes=minutes + baseline_offset_minutes)
+        before = query_prometheus.func(promql, minutes=baseline_minutes,
+                                       ends_minutes_ago=minutes)
         current = now["series"][0] if now.get("series") else None
         baseline = before["series"][0] if before.get("series") else None
         signals[name] = {
@@ -104,7 +157,8 @@ def golden_signals(service: str, minutes: int = 30, baseline_offset_minutes: int
             "baseline_avg": baseline["avg"] if baseline else None,
             "promql": promql,
         }
-    return {"service": service, "window_minutes": minutes, "signals": signals}
+    return {"service": service, "window_minutes": minutes,
+            "baseline_minutes": baseline_minutes, "signals": signals}
 
 
 def _pattern(line: str) -> str:
@@ -132,8 +186,9 @@ def query_loki_patterns(service: str, minutes: int = 30, level: str = "error",
     Це основний тул для логів. Сирі рядки в промпт не йдуть: вони і дорогі, і є
     недовіреним текстом — по них можна прилетіти prompt injection.
     """
-    selector = f'{{service="{service}"}} | json | level="{level}"' if level \
-        else f'{{service="{service}"}}'
+    selector = f'{{service="{_label(service)}"}}'
+    if level:
+        selector += f" | json | level={_literal(level)}"
     lines = _fetch_logs(selector, minutes, MAX_LOG_LINES)
 
     groups: dict[str, list[str]] = collections.defaultdict(list)
@@ -160,6 +215,7 @@ def query_loki_patterns(service: str, minutes: int = 30, level: str = "error",
 @tool
 def query_loki_logs(service: str, contains: str, minutes: int = 30, limit: int = 20) -> dict:
     """Точковий пошук рядків із підрядком — коли патернів мало і треба глянути конкретику."""
-    lines = _fetch_logs(f'{{service="{service}"}} |= `{contains}`', minutes, limit)
+    lines = _fetch_logs(f'{{service="{_label(service)}"}} |= {_literal(contains)}',
+                        minutes, limit)
     return {"service": service, "contains": contains,
             "matched": len(lines), "lines": lines[:limit]}

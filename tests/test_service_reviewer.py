@@ -1,4 +1,6 @@
 """A3: чекліст детермінований, тому перевіряється повністю без моделі."""
+import pathlib
+
 import pytest
 import yaml
 
@@ -177,3 +179,74 @@ def test_review_combines_sections_and_attaches_artifact(backend):
     assert result["overall_grade"] in "ABCDF"
     assert "groups:" in result["proposed_alert_rules"], "має бути готовий YAML"
     assert yaml.safe_load(result["proposed_alert_rules"])["groups"][0]["rules"]
+
+
+# --- ревізія проти ПРАВИЛ САМОГО СТЕНДУ ---------------------------------------
+#
+# Решта тестів годує правила, у яких ім'я сервісу стоїть усередині expr. Стенд так
+# правил не пише: golden-signals описані один раз і агрегують `by (service)`. Через це
+# світ тестів не збігався зі світом стенду — і рівно на демо A3 ставив F здоровому
+# сервісу, бо фільтр шукав ім'я сервісу в тексті виразу. Ці два тести читають той самий
+# файл, який монтується в Prometheus, тому розбіжність більше не може бути тихою.
+
+STAND_RULES = pathlib.Path(__file__).resolve().parent.parent / "infra/prometheus/rules/alerts.yml"
+
+
+def stand_rules() -> list[dict]:
+    """Правила стенду у формі, в якій їх віддає /api/v1/rules."""
+    groups = yaml.safe_load(STAND_RULES.read_text())["groups"]
+    return [
+        {"type": "alerting", "name": r["alert"], "query": r["expr"],
+         "duration": _seconds(r.get("for", "0s")), "labels": r.get("labels", {}),
+         "annotations": r.get("annotations", {})}
+        for g in groups for r in g["rules"]
+    ]
+
+
+def _seconds(duration: str) -> int:
+    return int(duration.rstrip("smh")) * {"s": 1, "m": 60, "h": 3600}[duration[-1]]
+
+
+def test_service_agnostic_stand_rules_cover_the_service(backend):
+    """Правило без селектора сервісу покриває всі сервіси — зокрема й цей."""
+    from agents.service_reviewer import check_alerts
+
+    backend["rules"] = stand_rules()
+    result = check_alerts("demo-chaos-svc")
+
+    assert result["missing_signals"] == [], (
+        f"здоровий сервіс на правилах стенду лишився без покриття: {result['findings']}")
+    assert result["grade"] in ("A", "B"), result
+
+
+def test_rule_pinned_to_another_service_does_not_count(backend):
+    """Зворотний бік: правило з явним селектором чужого сервісу не покриває наш."""
+    from agents.service_reviewer import check_alerts
+
+    backend["rules"] = [rule("OtherErrors",
+                             'rate(http_requests_total{service="payment-gateway",status=~"5.."}[1m]) > 0.05')]
+    assert "error_rate" in check_alerts("demo-chaos-svc")["missing_signals"]
+
+
+def test_regex_selector_matches_the_service(backend):
+    from agents.service_reviewer import check_alerts
+
+    backend["rules"] = [rule("Errors",
+                             'rate(http_requests_total{service=~"demo-.*",status=~"5.."}[1m]) > 0.05')]
+    assert "error_rate" not in check_alerts("demo-chaos-svc")["missing_signals"]
+
+
+def test_alert_without_for_lowers_the_score(backend):
+    """Раніше without_for потрапляв у findings, але на бал не впливав."""
+    from agents.service_reviewer import check_alerts
+
+    full = [rule(f"R{i}", q) for i, q in enumerate(
+        ['http_requests_total{status=~"5.."}', "histogram_quantile(0.95, x)",
+         "process_start_time_seconds", "process_resident_memory_bytes"])]
+    backend["rules"] = full
+    with_for = check_alerts("demo-chaos-svc")["score"]
+
+    backend["rules"] = [{**r, "duration": 0} for r in full]
+    without_for = check_alerts("demo-chaos-svc")["score"]
+
+    assert without_for < with_for, "алерт без for будить людину на одиничному викиді"

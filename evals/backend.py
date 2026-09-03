@@ -56,15 +56,13 @@ def _stamp(minutes_ago: int) -> str:
 
 @contextlib.contextmanager
 def use_fixtures(case, monkeypatch):
-    """Вмикає виводи кейса для всіх тулів на час блоку."""
+    """Вмикає виводи кейса для всіх тулів на час блоку."""  # noqa: D401
     import agents.tools.actions as actions
     import agents.tools.stand as stand
     from agents.tools import observability
 
     fixtures = case.get("fixtures", {})
     metrics = fixtures.get("metrics", {})
-    window = case.get("window_minutes", 30)
-    calls: list[str] = []
 
     def fake_get(url: str, params: dict) -> dict:
         if "/loki/" in url:  # шлях Loki містить у собі шлях Prometheus — перевіряти першим
@@ -74,9 +72,11 @@ def use_fixtures(case, monkeypatch):
         signal = _signal_of(params.get("query", ""))
         if signal is None:
             return _prom_payload([])
-        # golden_signals робить два запити: вікно інциденту і baseline ширшим вікном
-        span = (int(params["end"]) - int(params["start"])) // 60
-        key = "baseline" if span > window else "current"
+        # golden_signals робить два ЗСУНУТІ вікна: current закінчується «зараз»,
+        # baseline — на початку current. Розрізняти за шириною не можна: вона в них
+        # може збігтись, а кінець вікна — ні, і саме кінець тут визначальний.
+        ends_ago_minutes = (time.time() - int(params["end"])) / 60
+        key = "baseline" if ends_ago_minutes > 1 else "current"
         return _prom_payload(metrics.get(signal, {}).get(key, []))
 
     def fake_recent(filename: str, service: str | None, hours: int) -> list[dict]:
@@ -91,4 +91,4 @@ def use_fixtures(case, monkeypatch):
     monkeypatch.setattr(stand, "_recent", fake_recent)
     monkeypatch.setattr(actions, "SLACK_FILE", case["_tmp_slack"])
     monkeypatch.setattr(actions, "_post", lambda url, payload, headers: {"id": 1})
-    yield calls
+    yield

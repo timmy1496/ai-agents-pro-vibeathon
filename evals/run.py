@@ -77,8 +77,8 @@ def print_delta(current: dict, previous: dict | None) -> None:
             print(f"  {key:22} {value}")
             continue
         delta = value - previous[key]
-        mark = "=" if abs(delta) < 1e-9 else ("+" if delta > 0 else "")
-        print(f"  {key:22} {value}   ({mark}{delta:+.3f} до попереднього)".replace("(+", "("))
+        change = "без змін" if abs(delta) < 1e-9 else f"{delta:+.3f} до попереднього"
+        print(f"  {key:22} {value}   ({change})")
 
 
 def main(argv: list[str] | None = None) -> int:

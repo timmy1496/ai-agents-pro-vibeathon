@@ -8,15 +8,17 @@
 """
 from __future__ import annotations
 
+import functools
 from typing import Literal
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import (
-    HumanInTheLoopMiddleware, ModelCallLimitMiddleware, PIIMiddleware,
-)
+from langchain.agents.middleware import ModelCallLimitMiddleware, PIIMiddleware
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from agents.config import CHEAP_MODEL, STRONG_MODEL
+from agents.guardrails import approval_middleware
 from agents.kb import store as kb_store
 from agents.models import resolve
 from agents.tools.actions import create_annotation, post_slack, propose_action
@@ -118,8 +120,9 @@ def build_agent(model: str = STRONG_MODEL, checkpointer=None, **kwargs):
         # користувача — тому apply_to_tool_results обов'язковий, дефолт його не вмикає.
         PIIMiddleware("email", strategy="redact", apply_to_tool_results=True),
         PIIMiddleware("ip", strategy="redact", apply_to_tool_results=True),
-        # propose_action не спрацює без явного "ок" людини
-        HumanInTheLoopMiddleware(interrupt_on={"propose_action": True}),
+        # Дві половини однієї політики: деструктив відсікається до людини, решта
+        # пропозицій чекає її "ок". Порядок усередині значущий — див. agents/guardrails.py.
+        *approval_middleware(),
     ]
     return create_agent(
         model=resolve(model),
@@ -130,6 +133,36 @@ def build_agent(model: str = STRONG_MODEL, checkpointer=None, **kwargs):
         checkpointer=checkpointer,
         **kwargs,
     )
+
+
+# Стан interrupt'а живе в checkpointer, а не у відповіді .invoke(). Без спільного
+# checkpointer'а на процес перерваний на HITL граф нікому продовжити: /approve міг лише
+# написати в тред «людина підтвердила», а сам interrupt висів назавжди і петля HITL
+# фактично не замикалась. Один saver на процес — тред інциденту переживає HTTP-запити.
+_CHECKPOINTER = InMemorySaver()
+
+
+@functools.cache
+def shared_agent(model: str = STRONG_MODEL):
+    """Агент процесу: до нього повертається /approve, щоб продовжити перерваний граф."""
+    return build_agent(model, checkpointer=_CHECKPOINTER)
+
+
+def _thread_id(config: dict | None) -> str | None:
+    return (config or {}).get("configurable", {}).get("thread_id")
+
+
+def resume(decision: Literal["approve", "reject"], note: str = "",
+           config: dict | None = None) -> dict:
+    """Продовжує граф, що стоїть на HITL, рішенням людини.
+
+    Рішення людини — це саме рішення, а не дозвіл агенту діяти: на approve тул
+    propose_action виконується і повертає «awaiting_human_approval» у тред. Жодних
+    змін в інфраструктурі агент не робить ні до, ні після підтвердження.
+    """
+    return shared_agent().invoke(
+        Command(resume={"decisions": [{"type": decision, "message": note}]}),
+        config=config or {})
 
 
 class Verdict(BaseModel):
@@ -189,7 +222,9 @@ def investigate(alert: dict, agent=None, max_revisions: int = MAX_REVISIONS,
 
     Повертає звіт, вердикт і кількість обертів — усе троє потрібні евалам.
     """
-    agent = agent or build_agent()
+    # Зі спільним агентом interrupt можна продовжити (див. resume). Без thread_id
+    # checkpointer нікуди писати — так бігають евали, і їм окремий агент і потрібен.
+    agent = agent or (shared_agent() if _thread_id(config) else build_agent())
     prompt = f"Розберись з алертом і дай висновок:\n{alert}"
     messages = [{"role": "user", "content": prompt}]
 

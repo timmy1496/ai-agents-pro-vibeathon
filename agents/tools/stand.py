@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 
 from langchain_core.tools import tool
 
@@ -69,12 +70,43 @@ def get_active_alerts(service: str | None = None) -> list[dict]:
     ]
 
 
+# Прив'язка правила до сервісу в самому виразі: service="x" або service=~"x|y".
+SERVICE_SELECTOR = re.compile(r'\bservice\s*(=~|=)\s*"([^"]*)"')
+
+
+def _applies_to(expr: str, service: str) -> bool:
+    """Чи стосується правило цього сервісу.
+
+    Раніше тут було `service in rule["query"]`, і це відповідало на інше питання:
+    «чи згадано ім'я сервісу у виразі». Реальні правила golden-signals пишуть один раз
+    на весь стенд і агрегують `by (service)` — імені сервісу в них немає взагалі, тому
+    ревізія здорового сервісу бачила нуль правил і ставила F за повної відсутності
+    проблеми. Правило без прив'язки покриває ВСІ сервіси — зокрема й цей.
+    """
+    pinned = SERVICE_SELECTOR.findall(expr)
+    if not pinned:
+        return True
+    return any(_matches(operator, value, service) for operator, value in pinned)
+
+
+def _matches(operator: str, value: str, service: str) -> bool:
+    if operator == "=":
+        return value == service
+    try:  # =~ це RE2 у Prometheus; несумісний із re синтаксис не має валити ревізію
+        return re.fullmatch(value, service) is not None
+    except re.error:
+        return False
+
+
 @tool
 def get_alert_rules(service: str | None = None) -> list[dict]:
     """Правила алертів з Prometheus: вираз, for, severity, чи є runbook_url.
 
     Потрібен для ревізії: покриття golden signals і наявність runbook у мітках —
     саме те, чого зазвичай бракує, і саме те, що видно лише з правил, а не з метрик.
+
+    service фільтрує за тим, чи правило СТОСУЄТЬСЯ сервісу, а не за згадкою його імені:
+    сервіс-агностичне правило (агрегація `by (service)` без селектора) покриває і його.
     """
     try:
         payload = _get(f"{PROMETHEUS_URL}/api/v1/rules", {"type": "alert"})
@@ -93,5 +125,5 @@ def get_alert_rules(service: str | None = None) -> list[dict]:
         for group in payload.get("data", {}).get("groups", [])
         for rule in group.get("rules", [])
         if rule.get("type") == "alerting"
-        and (service is None or service in rule.get("query", ""))
+        and (service is None or _applies_to(rule.get("query", ""), service))
     ]

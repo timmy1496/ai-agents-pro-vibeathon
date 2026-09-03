@@ -18,6 +18,18 @@ GRAFANA_URL = os.getenv("GRAFANA_URL", "http://localhost:3000")
 GRAFANA_AUTH = os.getenv("GRAFANA_AUTH", "admin:admin")
 ALERTMANAGER_URL = os.getenv("ALERTMANAGER_URL", "http://localhost:9093")
 
+# GRAFANA_URL — голий URL; креденшели окремо, бо їх шлють заголовком Authorization,
+# а не в самому URL. scripts/incident.sh раніше очікував тут http://admin:admin@... —
+# те саме ім'я змінної означало два різні формати, і один із двох завжди ламався.
+# Тепер скрипт складає свій URL сам з GRAFANA_URL + GRAFANA_AUTH.
+
+# Спільний секрет HTTP-входу. Вебхук Alertmanager і, головне, /approve — це кнопка HITL:
+# без токена будь-хто в мережі стенду «підтверджує» дію від імені чергового.
+# Дефолт демонстраційний і лежить у .env.example навмисно — щоб стенд піднімався з
+# коробки; для будь-чого, крім локального демо, змінна має бути задана явно.
+AGENT_TOKEN = os.getenv("AGENT_TOKEN", "sre-demo-token")
+AGENT_TOKEN_IS_DEFAULT = "AGENT_TOKEN" not in os.environ
+
 # Langfuse: ключі за замовчуванням — ті, що compose створює через LANGFUSE_INIT_*.
 LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "http://localhost:3001")
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "pk-lf-demo")
