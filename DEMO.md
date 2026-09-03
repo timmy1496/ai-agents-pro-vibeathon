@@ -67,7 +67,7 @@ WebSocket до нас, тому не потрібні ні публічний UR
 make incident-1
 ```
 
-Поки чекаємо ~40 секунд:
+Поки чекаємо ~15 секунд:
 
 > Chaos увімкнув 35% помилок і записав деплой v1.5.0. Prometheus зараз побачить
 > зростання 5xx, алерт перейде з pending у firing, Alertmanager смикне вебхук агента.
@@ -78,6 +78,10 @@ make incident-1
 
 1. `🚨 HighErrorRate critical на demo-chaos-svc: error rate 34%` — одразу;
 2. **у тред** цього повідомлення, через 30–60 с — звіт RCA.
+
+> Правила стенду навмисно швидкі: вікно `rate` — 15 с, `for: 0s`, `group_wait: 2s`.
+> У проді так не роблять — короткі вікна дають шумні алерти; там [1m]..[5m] і for: 2m..5m.
+> Тут ми свідомо міняємо тишу вночі на швидкість показу.
 
 Читати зі звіту саме це:
 
@@ -180,7 +184,7 @@ make reset
 |---|---|
 | Бот мовчить на згадку | чи запущений `make slack-bot`; Event Subscriptions → `app_mention`; скоуп `app_mentions:read` + Reinstall |
 | `latin-1 codec` при старті | у `.env` лишився плейсхолдер замість токена — `make slack-bot` тепер каже це прямо |
-| Алерт не firing за 2 хв | `curl -s localhost:9090/api/v1/alerts \| jq` |
+| Алерт не firing за 30 с | `curl -s localhost:9090/api/v1/alerts \| jq` |
 | Алерт є, у Slack нічого | Alertmanager дедуплікує: `docker compose up -d --force-recreate alertmanager` |
 | Тред порожній | `tail -20 /tmp/agent.log`; чи піднятий `make agent` |
 | Пошук по KB порожній | `make kb-index` |

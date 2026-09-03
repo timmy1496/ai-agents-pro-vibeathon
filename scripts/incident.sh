@@ -21,20 +21,20 @@ case "${1:-}" in
     python3 "$ROOT/scripts/record.py" k8s demo-chaos-svc Created "Created container chaos-svc (v1.5.0)"
     annotate "deploy demo-chaos-svc v1.5.0"
     curl -sf -X POST "$CHAOS/chaos/errors?rate=0.35" && echo
-    echo "-> очікуй алерт HighErrorRate за ~1 хв"
+    echo "-> алерт HighErrorRate за ~15 с"
     ;;
   2)
     echo "== Сценарій 2: недоступна залежність orders-db -> latency + timeouts =="
     curl -sf -X POST "$CHAOS/chaos/db-down?enabled=true" && echo
     python3 "$ROOT/scripts/record.py" k8s orders-db Unhealthy "Readiness probe failed: dial tcp 10.4.2.11:5432: i/o timeout"
-    echo "-> очікуй алерт HighLatencyP95 за ~1.5 хв"
+    echo "-> алерт HighLatencyP95 за ~15 с"
     ;;
   3)
     echo "== Сценарій 3: memory leak -> OOMKilled рестарти =="
     curl -sf -X POST "$CHAOS/chaos/oom?mb_per_sec=16" && echo
     python3 "$ROOT/scripts/record.py" k8s demo-chaos-svc OOMKilling "Memory cgroup out of memory: Killed process (uvicorn), limit 256Mi"
     python3 "$ROOT/scripts/record.py" k8s demo-chaos-svc BackOff "Back-off restarting failed container chaos-svc"
-    echo "-> очікуй HighMemoryUsage за ~1 хв, далі FrequentRestarts"
+    echo "-> HighMemoryUsage за ~15 с, далі FrequentRestarts"
     ;;
   reset)
     echo "== Скидання chaos =="

@@ -82,5 +82,26 @@
     "reason": "Created",
     "message": "Created container chaos-svc (v1.5.0)",
     "ts": "2026-09-03T19:04:20Z"
+  },
+  {
+    "service": "orders-db",
+    "type": "Warning",
+    "reason": "Unhealthy",
+    "message": "Readiness probe failed: dial tcp 10.4.2.11:5432: i/o timeout",
+    "ts": "2026-09-03T19:19:05Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:21:48Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:23:07Z"
   }
 ]

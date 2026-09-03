@@ -4,8 +4,10 @@ global:
 route:
   receiver: sre-agent
   group_by: [alertname, service]
-  group_wait: 10s
-  group_interval: 30s
+  # group_wait — це пауза на догрупування схожих алертів перед першою відправкою.
+  # Для демо 2s: далі чекати нічого, у нас один сервіс.
+  group_wait: 2s
+  group_interval: 15s
   repeat_interval: 4h
 
 receivers:
