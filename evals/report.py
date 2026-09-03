@@ -227,6 +227,28 @@ def render(report: dict, previous: dict | None) -> str:
               'а не результат прогону: числа синтетичні. Справжній звіт: '
               '<code>make eval-online</code>.</div>') if meta.get("sample") else ""
 
+    # Транспорт — теж частина вимірювального інструмента, і мовчати про нього не можна:
+    # через Claude Code CLI tool calling промптовий, а не нативний, тому ці числа
+    # порівнюються лише з іншими прогонами того самого транспорту.
+    transport_note = ''
+    if meta.get("provider") == "claude-code":
+        transport_note = (
+            '<div class="card sample"><b>Прогін на підписці Claude Code.</b> Виклики '
+            'ідуть через <code>claude -p</code>, тому tool calling тут промптовий, а не '
+            'нативний: агентський цикл, middleware і guardrails ті самі, механіка '
+            'виклику інструментів — інша. Ці оцінки порівнюються лише з іншими '
+            'прогонами через той самий транспорт.</div>')
+
+    cost = meta.get("spend")
+    cost_note = ''
+    if cost and cost.get("calls"):
+        per_case = cost["usd"] / max(meta.get("cases") or 1, 1)
+        cost_note = (
+            f'<div class="card sample">{cost["calls"]} викликів моделі, '
+            f'${cost["usd"]:.2f} за прейскурантом (${per_case:.2f} на кейс). На підписці '
+            f'це не рахунок, а порядок величини — але саме він відповідає на питання '
+            f'«скільки коштує розібраний інцидент».</div>')
+
     comparison = ("порівняння з попереднім прогоном тієї самої рубрики"
                   if previous else
                   "попереднього прогону цієї рубрики немає — дельти не буде")
@@ -241,7 +263,9 @@ def render(report: dict, previous: dict | None) -> str:
 <p class="sub">{html.escape(meta['stamp'])} · {meta['cases']} кейсів ·
 рубрика <code>{html.escape(meta['rubric_version'])}</code> ·
 суддя <code>{html.escape(str(meta['judge_model'] or 'не викликався'))}</code> ·
-агент <code>{html.escape(str(meta['agent_model']))}</code></p>
+агент <code>{html.escape(str(meta['agent_model']))}</code> ·
+транспорт <code>{html.escape(str(meta.get('provider', '—')))}</code></p>
+{transport_note}{cost_note}
 
 {sample}
 <div class="card verdict {verdict_class}">

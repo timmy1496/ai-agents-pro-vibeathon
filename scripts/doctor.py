@@ -177,17 +177,22 @@ def check_agent(agent_url: str, token: str) -> Check:
     return Check("агент приймає вебхук", True, agent_url)
 
 
-def check_model_key() -> Check:
-    import os
+def check_model_access() -> Check:
+    """Чи є чим ходити в модель. Ключ — не єдиний варіант."""
+    from agents.models import provider
 
-    from agents.config import OPENROUTER_KEY
+    transport = provider()
+    if transport == "claude-code":
+        from agents.providers import claude_code
 
-    if OPENROUTER_KEY or os.getenv("ANTHROPIC_API_KEY"):
-        return Check("ключ моделі", True, "є")
-    return Check("ключ моделі", False, "немає",
-                 "без ключа працює детермінована половина (make eval, make test), "
-                 "але живого RCA на демо не буде: додай ANTHROPIC_API_KEY або "
-                 "OPENROUTER_API_KEY у .env")
+        if claude_code.available():
+            return Check("доступ до моделі", True,
+                         "Claude Code CLI (підписка); tool calling промптовий")
+        return Check("доступ до моделі", False, "ні ключа, ні CLI",
+                     "додай ANTHROPIC_API_KEY / OPENROUTER_API_KEY у .env або встанови "
+                     "Claude Code CLI — без цього працює лише детермінована половина "
+                     "(make eval, make test)")
+    return Check("доступ до моделі", True, transport)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -214,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         check_logs(LOKI_URL, args.service),
         check_kb(),
         check_embedder(),
-        check_model_key(),
+        check_model_access(),
         check_agent(agent_url, AGENT_TOKEN),
         # Langfuse не критичний: трейсинг деградує мовчки і інцидент не ламає (див.
         # agents/observability.py). Але на демо його показують, тому перевіряємо.

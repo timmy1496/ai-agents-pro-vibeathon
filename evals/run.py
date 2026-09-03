@@ -102,17 +102,27 @@ def check_gate(summary: dict, previous: dict | None) -> list[str]:
     return failures
 
 
-def previous_report() -> dict | None:
-    """Попередній прогін ТІЄЇ САМОЇ рубрики і того самого судді.
+def comparable(meta: dict) -> bool:
+    """Чи можна порівнювати цей прогін з поточним.
 
-    Дельта між різними рубриками або суддями не є дельтою якості агента: зсунувся сам
-    інструмент. Такі прогони просто пропускаються, а не приводяться до спільного вигляду.
+    Три речі мають збігтись, і всі три — частини вимірювального інструмента, а не
+    налаштування: версія рубрики, модель судді і ПРОВАЙДЕР. Останній тут не для
+    повноти: через Claude Code CLI tool calling промптовий, а не нативний, тобто
+    агент виконує іншу механіку виклику інструментів. Дельта між прогонами на різних
+    провайдерах виміряла б різницю транспортів, а не якість агента.
     """
+    from agents.models import provider
+
+    return (meta.get("rubric_version") == config.rubric_version()
+            and meta.get("judge_model") == config.judge_model()
+            and meta.get("provider") == provider())
+
+
+def previous_report() -> dict | None:
+    """Останній ПОРІВНЯННИЙ прогін. Решта пропускається, а не приводиться до вигляду."""
     for path in sorted(REPORTS.glob("*.json"), reverse=True):
         report = json.loads(path.read_text(encoding="utf-8"))
-        meta = report.get("meta", {})
-        if (meta.get("rubric_version") == config.rubric_version()
-                and meta.get("judge_model") == config.judge_model()):
+        if comparable(report.get("meta", {})):
             return report
     return None
 
@@ -147,14 +157,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"кейса '{args.case}' немає в датасеті", file=sys.stderr)
         return 2
 
-    import os
+    from agents.config import STRONG_MODEL  # імпорт тягне load_dotenv
+    from agents.models import provider, reset_spend, spend
 
-    from agents.config import OPENROUTER_KEY, STRONG_MODEL  # імпорт тягне load_dotenv
+    transport = provider()
+    if transport == "claude-code":
+        from agents.providers import claude_code
 
-    if not (OPENROUTER_KEY or os.getenv("ANTHROPIC_API_KEY")):
-        print("Потрібен ANTHROPIC_API_KEY або OPENROUTER_API_KEY у .env.\n"
-              "Детермінований гейт бігає без ключа: make eval", file=sys.stderr)
-        return 2
+        if not claude_code.available():
+            print("Немає ні API-ключа, ні Claude Code CLI у PATH.\n"
+                  "Детермінований гейт бігає без обох: make eval", file=sys.stderr)
+            return 2
+        print("провайдер: Claude Code CLI (підписка). Tool calling промптовий, не "
+              "нативний — оцінки не порівнюються з прогонами через API.\n")
+    reset_spend()
 
     tmp = REPORTS / "_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
@@ -176,7 +192,9 @@ def main(argv: list[str] | None = None) -> int:
             "prompts_sha": config.prompts_digest(),
             "judge_model": config.judge_model() if not args.no_judge else None,
             "agent_model": STRONG_MODEL,
+            "provider": transport,
             "cases": len(rows),
+            "spend": spend(),
         },
         "summary": summary,
         "gate": {"passed": not failures, "failures": failures},
@@ -189,6 +207,11 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print_delta(summary, (previous or {}).get("summary"))
+    if (cost := spend()):
+        per_case = cost["usd"] / max(len(rows), 1)
+        print(f"\n  {'викликів моделі':22} {cost['calls']}")
+        print(f"  {'вартість (прейскурант)':22} ${cost['usd']:.2f} "
+              f"(${per_case:.3f} на кейс)")
     print(f"\nзвіт: evals/reports/{stamp}.json")
 
     if args.html:

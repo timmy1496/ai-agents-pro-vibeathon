@@ -74,6 +74,8 @@ def _artifacts(case: dict, report: Any, tool_log: str) -> str:
 
 def _parse(raw: str, dimension: str) -> Score | NotApplicable:
     """Розбір відповіді судді. Порядок ключів — частина контракту, тому перевіряється."""
+    if "{" not in raw or "}" not in raw:
+        raise ValueError(f"{dimension}: суддя відповів без JSON: {raw[:300]!r}")
     payload = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
     keys = list(payload)
     if keys[:1] != ["rationale"]:
