@@ -109,3 +109,22 @@ def test_policy_cases(case):
 
 # Форма датасету перевіряється у tests/test_eval_contract.py — вимоги оголошені
 # в evals/eval.toml, щоб планка піднімалась правкою даних, а не коду.
+
+
+def test_saturation_word_without_load_growth_is_not_capacity():
+    """Коротка дорога, якою хибна мітка проходила повз гейт.
+
+    cap-02 мав рівний трафік (88 -> 90) і мітку "capacity"; класифікатор бачив слово
+    "cache" у патерні й погоджувався з міткою — з хибної причини. Тому кейс, який
+    карав агента за правильну відповідь, проходив test_case_is_solvable_from_its_own_evidence.
+    """
+    flat = {
+        "signals": {"rps": {"current_avg": 90.0, "baseline_avg": 88.0}},
+        "patterns": [{"pattern": "cache miss for cart draft key", "count": 400}],
+        "deploys": [], "k8s_events": [],
+    }
+    assert runner.classify(flat) != "capacity"
+
+    under_load = {**flat, "signals": {"rps": {"current_avg": 280.0, "baseline_avg": 88.0}}}
+    assert runner.classify(under_load) == "capacity", \
+        "та сама ознака ПІД навантаженням — вже насичення"

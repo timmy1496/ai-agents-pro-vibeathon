@@ -38,12 +38,31 @@ def _has_recent_deploy(evidence: dict) -> bool:
     return any(d["minutes_ago"] <= DEPLOY_WINDOW_MINUTES for d in evidence["deploys"])
 
 
+# Наскільки має вирости трафік, щоб слово про насичення означало саме capacity.
+# Нижче за це "cache"/"pool"/"queue" у логах однаково добре пояснюються залежністю.
+LOAD_PRESSURE = 1.5
+
+
 def _has_saturation(evidence: dict) -> bool:
+    """Насичення = сплеск трафіку, або ознака насичення ПІД навантаженням.
+
+    Раніше достатньо було слова зі SATURATION_WORDS у топ-3 патернах — і саме ця
+    коротка дорога сховала хибно розмічений кейс: cap-02 мав рівний трафік (88 -> 90)
+    і мітку "capacity", класифікатор бачив "cache" у логах і погоджувався з міткою,
+    тому test_case_is_solvable_from_its_own_evidence мовчав. Агент відповідав
+    "dependency" — правильно — і отримував MISS.
+
+    Слово про насичення без жодного росту навантаження не є ознакою capacity:
+    масові cache miss при рівному трафіку — це поведінка залежності.
+    """
     rps = evidence["signals"]["rps"]
-    spike = (rps["current_avg"] or 0) >= 3 * (rps["baseline_avg"] or 1e9)
+    current, baseline = rps["current_avg"] or 0, rps["baseline_avg"]
+    ratio = current / baseline if baseline else 0
+    if ratio >= 3:
+        return True
     pattern = any(word in p["pattern"].lower()
                   for p in evidence["patterns"][:3] for word in SATURATION_WORDS)
-    return spike or pattern
+    return pattern and ratio >= LOAD_PRESSURE
 
 
 # Порядок = специфічність сигналу. OOM іде перед деплоєм свідомо: leak, що приїхав

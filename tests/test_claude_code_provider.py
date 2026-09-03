@@ -164,6 +164,9 @@ def test_without_tools_the_protocol_is_not_injected(model):
 
     assert "Ти суддя." in system
     assert "tool_calls" not in system, "протокол не має домішуватись до текстового виклику"
+    assert "НЕМАЄ жодних інструментів середовища" in system, (
+        "факт про середовище потрібен і без протоколу: інакше модель тягнеться до Read "
+        "чи Bash і виклик обривається — так упав кейс cfg-02 на кроці перекладу")
 
     answer = model.invoke([{"role": "user", "content": "оціни"}])
     assert json.loads(answer.content)["score"] == 0.8, "сирий текст іде як є"
