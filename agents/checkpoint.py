@@ -23,5 +23,10 @@ CHECKPOINT_DB = DATA_DIR / "checkpoints.sqlite"
 def saver() -> SqliteSaver:
     CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
     # check_same_thread=False: агент виконує тули в кількох потоках
-    connection = sqlite3.connect(CHECKPOINT_DB, check_same_thread=False)
+    # timeout: у базу пишуть два процеси — вебхук і слухач Slack; без очікування
+    # другий одразу отримує "database is locked"
+    connection = sqlite3.connect(CHECKPOINT_DB, check_same_thread=False, timeout=30)
+    # WAL дозволяє читати під час запису — інакше процеси блокують один одного
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA busy_timeout=30000")
     return SqliteSaver(connection)
