@@ -1,11 +1,19 @@
+# Вікна навмисно вичавлені до мінімуму: на демо алерт має спрацювати за секунди.
+# 15s при scrape_interval 5s — це три семпли, менше вже не має сенсу: rate() почне
+# стрибати від одиничного запиту. for: 0s прибирає ще десять секунд очікування.
+#
+# У проді так робити не можна: короткі вікна плюс for: 0s дають шумні алерти на кожен
+# випадковий сплеск. Продові значення — [1m]..[5m] і for: 2m..5m; там затримка в кілька
+# хвилин купує тишу вночі. Тут ми навмисно міняємо тишу на швидкість показу.
 groups:
   - name: golden-signals
+    interval: 5s
     rules:
       - alert: HighErrorRate
         expr: |
-          sum by (service) (rate(http_requests_total{status=~"5.."}[1m]))
-            / clamp_min(sum by (service) (rate(http_requests_total[1m])), 0.001) > 0.05
-        for: 30s
+          sum by (service) (rate(http_requests_total{status=~"5.."}[15s]))
+            / clamp_min(sum by (service) (rate(http_requests_total[15s])), 0.001) > 0.05
+        for: 0s
         labels:
           severity: critical
         annotations:
@@ -15,8 +23,8 @@ groups:
       - alert: HighLatencyP95
         expr: |
           histogram_quantile(0.95,
-            sum by (service, le) (rate(http_request_duration_seconds_bucket[2m]))) > 1
-        for: 1m
+            sum by (service, le) (rate(http_request_duration_seconds_bucket[15s]))) > 1
+        for: 0s
         labels:
           severity: warning
         annotations:
@@ -24,7 +32,7 @@ groups:
           runbook_url: "kb/runbooks/high-latency.md"
 
       - alert: FrequentRestarts
-        expr: changes(process_start_time_seconds[10m]) > 2
+        expr: changes(process_start_time_seconds{service!=""}[10m]) > 2
         for: 0s
         labels:
           severity: critical
@@ -33,8 +41,8 @@ groups:
           runbook_url: "kb/runbooks/oomkilled-restarts.md"
 
       - alert: HighMemoryUsage
-        expr: process_resident_memory_bytes > 180e6
-        for: 30s
+        expr: process_resident_memory_bytes{service!=""} > 180e6
+        for: 0s
         labels:
           severity: warning
         annotations:

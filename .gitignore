@@ -3,3 +3,7 @@
 __pycache__/
 .venv/
 evals/reports/
+data/slack_threads.json
+data/slack_thread_map.json
+data/processed_alerts.json
+data/checkpoints.sqlite

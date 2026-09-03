@@ -67,7 +67,7 @@ eval:          ## Детермінований гейт евалів (без к�
 eval-contract: ## Контракт вимірювального інструмента: версія рубрики, промпти, форма датасету
 	.venv/bin/python -m pytest tests/test_eval_contract.py -q
 
-eval-online:   ## Прогін датасету агентом + суддя за рубрикою (потрібен ANTHROPIC_API_KEY)
+eval-online:   ## Прогін датасету агентом + суддя за рубрикою (ключ АБО підписка Claude Code)
 	.venv/bin/python -m evals.run --html
 
 eval-report:   ## Перезібрати docs/eval-report.html з останнього JSON-звіту
@@ -83,3 +83,11 @@ agent:         ## Запустити агента (вебхук Alertmanager + �
 .PHONY: demo-degradation
 demo-degradation:  ## Демо тихої деградації: змінили формат логів -> гейт червоніє
 	.venv/bin/python -m pytest tests/test_degradation.py -v
+
+.PHONY: slack-check
+slack-check:   ## Перевірити Slack: токен, канал, права, тред
+	.venv/bin/python -m scripts.slack_check
+
+.PHONY: slack-bot
+slack-bot:     ## Слухати Slack через Socket Mode (згадка бота -> відповідь у тред)
+	.venv/bin/python -m agents.slack_bot

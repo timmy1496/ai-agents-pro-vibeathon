@@ -59,6 +59,10 @@ services:
       GF_USERS_DEFAULT_THEME: light
     volumes:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # annotations про деплої живуть у внутрішній БД Grafana: без тому вони зникають
+      # при кожному перестворенні контейнера, а на демо це головна вертикальна лінія
+      - grafana-data:/var/lib/grafana
     ports: ["3000:3000"]
     depends_on:
       prometheus: {condition: service_healthy}
@@ -209,3 +213,6 @@ services:
       LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-demo
       LANGFUSE_INIT_USER_EMAIL: demo@example.com   # zod вимагає валідний домен з TLD
       LANGFUSE_INIT_USER_PASSWORD: demodemo123
+
+volumes:
+  grafana-data:

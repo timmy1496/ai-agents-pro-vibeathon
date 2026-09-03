@@ -150,3 +150,19 @@ def test_prompt_demands_executable_actions_not_intentions():
         assert anti_pattern in flat, (
             f"промпт має назвати намір-заглушку {anti_pattern!r} прямо: загальне "
             f"«будь конкретним» модель ігнорує")
+
+def test_agent_cannot_post_to_slack_itself():
+    """Куди писати — рішення оркестрації: лише вона знає тред поточного інциденту.
+
+    Коли post_slack був доступний моделі, вона викликала його з власним thread_id,
+    і замість відповіді в тред виходило окреме повідомлення в каналі.
+    """
+    from agents.incident_agent import WRITE_TOOLS
+
+    assert "post_slack" not in {tool.name for tool in WRITE_TOOLS}
+
+
+def test_agent_still_has_annotation_and_proposal():
+    from agents.incident_agent import WRITE_TOOLS
+
+    assert {tool.name for tool in WRITE_TOOLS} == {"create_annotation", "propose_action"}

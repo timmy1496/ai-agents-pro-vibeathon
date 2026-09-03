@@ -26,5 +26,131 @@
     "reason": "Created",
     "message": "Created container chaos-svc (v1.5.0)",
     "ts": "2026-09-03T09:04:49Z"
+  },
+  {
+    "service": "orders-db",
+    "type": "Warning",
+    "reason": "Unhealthy",
+    "message": "Readiness probe failed: dial tcp 10.4.2.11:5432: i/o timeout",
+    "ts": "2026-09-03T16:04:24Z"
+  },
+  {
+    "service": "orders-db",
+    "type": "Warning",
+    "reason": "Unhealthy",
+    "message": "Readiness probe failed: dial tcp 10.4.2.11:5432: i/o timeout",
+    "ts": "2026-09-03T16:15:39Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Warning",
+    "reason": "OOMKilling",
+    "message": "Memory cgroup out of memory: Killed process (uvicorn), limit 256Mi",
+    "ts": "2026-09-03T16:22:09Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Warning",
+    "reason": "BackOff",
+    "message": "Back-off restarting failed container chaos-svc",
+    "ts": "2026-09-03T16:22:09Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Warning",
+    "reason": "OOMKilling",
+    "message": "Memory cgroup out of memory: Killed process (uvicorn), limit 256Mi",
+    "ts": "2026-09-03T16:23:32Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Warning",
+    "reason": "BackOff",
+    "message": "Back-off restarting failed container chaos-svc",
+    "ts": "2026-09-03T16:23:32Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T18:42:51Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:04:20Z"
+  },
+  {
+    "service": "orders-db",
+    "type": "Warning",
+    "reason": "Unhealthy",
+    "message": "Readiness probe failed: dial tcp 10.4.2.11:5432: i/o timeout",
+    "ts": "2026-09-03T19:19:05Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:21:48Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:23:07Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:31:10Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:31:32Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:34:11Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:36:29Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T19:40:53Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T20:00:26Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T20:08:28Z"
   }
 ]

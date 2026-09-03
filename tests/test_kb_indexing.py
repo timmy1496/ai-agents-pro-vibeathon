@@ -9,7 +9,7 @@ def test_empty_collection_triggers_reindex(monkeypatch):
     from agents.kb import store
 
     store.QDRANT_URL = ":memory:"
-    store.client.cache_clear()
+    store._shared_client.cache_clear()
     store.reindex()
 
     # імітуємо обірваний прогін: колекція є, точок немає
@@ -32,10 +32,40 @@ def test_existing_populated_collection_is_not_rebuilt(monkeypatch):
     from agents.kb import store
 
     store.QDRANT_URL = ":memory:"
-    store.client.cache_clear()
+    store._shared_client.cache_clear()
     store.reindex()
 
     calls = []
     monkeypatch.setattr(store, "reindex", lambda: calls.append(1))
     store.ensure_indexed()
     assert not calls, "непорожню колекцію переіндексовувати не треба"
+
+
+def test_embedding_is_shared_and_thread_safe():
+    """Одна модель на процес: клієнт-на-потік вантажив по копії e5-large на 2.24 ГБ
+    і перетворював count() на дев'ять секунд."""
+    import concurrent.futures as futures
+    import threading
+
+    from agents.kb import store
+
+    barrier = threading.Barrier(4)
+
+    def embed(text):
+        barrier.wait(timeout=30)
+        return tuple(store.embed_dense([text])[0][:4])
+
+    with futures.ThreadPoolExecutor(4) as pool:
+        vectors = list(pool.map(embed, ["однаковий текст"] * 4))
+
+    assert len(set(vectors)) == 1, "паралельні виклики мають давати той самий вектор"
+    assert store._dense_model() is store._dense_model(), "модель має бути одна на процес"
+
+
+def test_client_holds_no_inference_state():
+    """Клієнт став звичайним HTTP-клієнтом — саме тому він потокобезпечний."""
+    from agents.kb import store
+
+    store.QDRANT_URL = ":memory:"
+    store._shared_client.cache_clear()
+    assert store.client() is store.client(), "один клієнт на процес"

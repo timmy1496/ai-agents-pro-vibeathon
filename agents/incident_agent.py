@@ -21,7 +21,7 @@ from agents.config import CHEAP_MODEL, STRONG_MODEL
 from agents.guardrails import approval_middleware
 from agents.kb import store as kb_store
 from agents.models import resolve
-from agents.tools.actions import create_annotation, post_slack, propose_action
+from agents.tools.actions import create_annotation, propose_action
 from agents.tools.catalog import get_service
 from agents.tools.kb import search_kb, similar_incidents
 from agents.tools.observability import (
@@ -107,6 +107,8 @@ SYSTEM_PROMPT = """Ти — Incident Responder SRE-команди. Твоя ро
 - Не повторюй той самий інструмент з тими самими аргументами. Якщо вивід уже є в історії,
   дані зібрані — повторний виклик нічого не додасть, а бюджет кроків з'їсть.
 - Жодних змін в інфраструктурі: тільки propose_action, рішення ухвалює людина.
+- Не намагайся публікувати звіт сам: його опублікують у тред інциденту за тебе.
+  Твій результат — структурований звіт, а не повідомлення в чат.
 - ПОРЯДОК: спершу віддай звіт. propose_action зупиняє роботу і чекає людину, тому
   виклик його разом зі звітом означає, що звіту не буде взагалі. Рекомендовані дії
   опиши в recommended_actions; propose_action викликай окремим кроком, коли попросять
@@ -120,7 +122,11 @@ READ_TOOLS = [
     get_deploys, k8s_events,
     similar_incidents, search_kb,
 ]
-WRITE_TOOLS = [post_slack, create_annotation, propose_action]
+# post_slack тут навмисно немає. Звіт публікує оркестрація — вона єдина знає тред
+# поточного інциденту. Коли тул був доступний моделі, вона викликала його з власним
+# thread_id, і замість відповіді в тред виходило окреме повідомлення в каналі поверх
+# уже опублікованого звіту. Куди писати — рішення оркестрації, а не моделі.
+WRITE_TOOLS = [create_annotation, propose_action]
 
 
 def build_agent(model: str = STRONG_MODEL, checkpointer=None, **kwargs):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import collections
 import json
+import logging
 import re
 import time
 import urllib.parse
@@ -18,9 +19,11 @@ from langchain_core.tools import tool
 
 from agents.config import LOKI_URL, PROMETHEUS_URL
 
+log = logging.getLogger(__name__)
+
 MAX_LOG_LINES = 2000     # стеля вибірки з Loki; у промпт іде агрегат, не ці рядки
 MAX_SAMPLES = 3          # скільки прикладів рядків на патерн віддаємо
-HTTP_TIMEOUT = 10
+HTTP_TIMEOUT = 30  # Loki по 2000 рядках буває повільним під паралельними розслідуваннями
 
 # Селектори збирає модель, яка щойно прочитала недовірені логи, тому все, що приходить
 # від неї, потрапляє в запит лише через ці дві функції.
@@ -69,6 +72,20 @@ def _get(url: str, params: dict) -> dict:
         return json.loads(response.read())
 
 
+def _safe_get(url: str, params: dict) -> dict | None:
+    """Те саме, але недоступне джерело — це не привід валити все розслідування.
+
+    Тул, що кинув виняток, обриває цикл агента і лишає інцидент без звіту. Краще
+    повернути порожньо і сказати про це в іншому полі: агент побачить брак даних
+    і зробить чесний висновок "unknown", а не помре на півдорозі.
+    """
+    try:
+        return _get(url, params)
+    except (OSError, json.JSONDecodeError) as error:
+        log.warning("джерело недоступне: %s (%s)", url, error)
+        return None
+
+
 def _window(minutes: int, ends_minutes_ago: int = 0) -> tuple[int, int]:
     """Вікно завдовжки `minutes`, що закінчується `ends_minutes_ago` хвилин тому.
 
@@ -109,8 +126,10 @@ def query_prometheus(query: str, minutes: int = 60, step: str = "30s",
       histogram_quantile(0.95, sum by (service, le) (rate(http_request_duration_seconds_bucket[2m])))
     """
     start, end = _window(minutes, ends_minutes_ago)
-    payload = _get(f"{PROMETHEUS_URL}/api/v1/query_range",
-                   {"query": query, "start": start, "end": end, "step": step})
+    payload = _safe_get(f"{PROMETHEUS_URL}/api/v1/query_range",
+                        {"query": query, "start": start, "end": end, "step": step})
+    if payload is None:
+        return {"error": "prometheus недоступний", "query": query, "series": []}
     if payload.get("status") != "success":
         return {"error": payload.get("error", "prometheus query failed"), "query": query}
     return {"query": query, "window_minutes": minutes,
@@ -169,11 +188,11 @@ def _pattern(line: str) -> str:
 
 def _fetch_logs(selector: str, minutes: int, limit: int) -> list[str]:
     start, end = _window(minutes)
-    payload = _get(f"{LOKI_URL}/loki/api/v1/query_range", {
+    payload = _safe_get(f"{LOKI_URL}/loki/api/v1/query_range", {
         "query": selector, "start": start * 10**9, "end": end * 10**9,
         "limit": limit, "direction": "backward",
     })
-    if payload.get("status") != "success":
+    if payload is None or payload.get("status") != "success":
         return []
     return [line for stream in payload["data"]["result"] for _, line in stream["values"]]
 

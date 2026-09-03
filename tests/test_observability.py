@@ -203,3 +203,39 @@ def test_unstructured_log_lines_do_not_crash(http):
         ["plain text panic", "0.35", "null", '{"msg":"ok"}', "[1,2,3]"])
     result = query_loki_patterns.invoke({"service": "demo-chaos-svc"})
     assert result["total_lines"] == 5 and result["distinct_patterns"] >= 3
+
+
+def test_unavailable_prometheus_does_not_kill_the_investigation(monkeypatch):
+    """Виняток із тулу обриває цикл агента і лишає інцидент без звіту."""
+    from agents.tools import observability
+
+    def timeout(url, params):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(observability, "_get", timeout)
+    result = observability.query_prometheus.invoke({"query": "up"})
+
+    assert result["error"] == "prometheus недоступний"
+    assert result["series"] == [], "структура відповіді має лишитись придатною для читання"
+
+
+def test_unavailable_loki_returns_empty_patterns(monkeypatch):
+    from agents.tools import observability
+
+    monkeypatch.setattr(observability, "_get",
+                        lambda url, params: (_ for _ in ()).throw(OSError("connection refused")))
+    result = observability.query_loki_patterns.invoke({"service": "demo-chaos-svc"})
+
+    assert result["total_lines"] == 0 and result["patterns"] == []
+
+
+def test_golden_signals_survive_a_dead_prometheus(monkeypatch):
+    """Найгірше — це коли частина сигналів є, а частини немає: агент має побачити обидва стани."""
+    from agents.tools import observability
+
+    monkeypatch.setattr(observability, "_get",
+                        lambda url, params: (_ for _ in ()).throw(TimeoutError("timed out")))
+    signals = observability.golden_signals.invoke({"service": "demo-chaos-svc"})["signals"]
+
+    assert set(signals) == {"error_rate", "latency_p95", "rps", "restarts", "memory_bytes"}
+    assert all(s["current_avg"] is None for s in signals.values())

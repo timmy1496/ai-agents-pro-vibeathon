@@ -25,29 +25,53 @@ PAYLOAD_FIELDS = ("text", "source", "title", "headings", "type", "service", "ser
                   "date", "tags", "root_cause_label", "severity")
 
 
-# ponytail: один RLock на весь доступ до Qdrant. Причина не в самій базі, а в клієнті:
-# при локальному інференсі QdrantClient тримає спільний акумулятор батчів ембеддингів і
-# ламається, коли агент кличе тули паралельно ("dictionary changed size during iteration",
-# а на індексації — напівстворені вектори). Ціна: пошук по KB серіалізований.
-# Прибрати, коли ембеддинги рахуватиме окремий сервіс, а не клієнт у процесі агента.
-_lock = threading.RLock()
-
-
-def _guarded(function):
-    """Серіалізує виклик — див. коментар біля _lock."""
-    @functools.wraps(function)
-    def wrapper(*args, **kwargs):
-        with _lock:
-            return function(*args, **kwargs)
-
-    return wrapper
+# Ембеддинги рахуємо самі й передаємо готові вектори. Причина: коли інференс робить
+# сам QdrantClient, він тримає всередині спільний акумулятор батчів і ламається при
+# паралельних викликах ("dictionary changed size during iteration"). Обхід через
+# клієнт-на-потік був гірший: кожен потік вантажив власну копію e5-large на 2.24 ГБ,
+# і count() починав займати 9 секунд замість мілісекунд.
+#
+# Тут одна модель на процес під локом (ONNX-сесія не потокобезпечна), а клієнт стає
+# звичайним HTTP-клієнтом без стану — і потокобезпечним задарма.
+_embed_lock = threading.Lock()
+_index_lock = threading.Lock()
+CLIENT_TIMEOUT = 30
 
 
 @functools.cache
-def client() -> QdrantClient:
-    # ":memory:" — локальний режим без docker: так евали й тести бігають офлайн.
+def _shared_client() -> QdrantClient:
+    """Один клієнт на процес: стану інференсу він більше не тримає."""
     return QdrantClient(location=QDRANT_URL) if QDRANT_URL.startswith(":") \
-        else QdrantClient(url=QDRANT_URL)
+        else QdrantClient(url=QDRANT_URL, timeout=CLIENT_TIMEOUT)
+
+
+def client() -> QdrantClient:
+    return _shared_client()
+
+
+@functools.cache
+def _dense_model():
+    from fastembed import TextEmbedding
+
+    return TextEmbedding(model_name=DENSE_MODEL)
+
+
+@functools.cache
+def _sparse_model():
+    from fastembed import SparseTextEmbedding
+
+    return SparseTextEmbedding(model_name=SPARSE_MODEL)
+
+
+def embed_dense(texts: list[str]) -> list[list[float]]:
+    with _embed_lock:  # ONNX-сесія не потокобезпечна
+        return [vector.tolist() for vector in _dense_model().embed(texts)]
+
+
+def embed_sparse(texts: list[str]) -> list[models.SparseVector]:
+    with _embed_lock:
+        return [models.SparseVector(indices=v.indices.tolist(), values=v.values.tolist())
+                for v in _sparse_model().embed(texts)]
 
 
 @functools.cache
@@ -58,12 +82,9 @@ def _dense_size() -> int:
                 if m["model"] == DENSE_MODEL)
 
 
-def _documents(text: str) -> dict:
-    return {DENSE: models.Document(text=text, model=DENSE_MODEL),
-            SPARSE: models.Document(text=text, model=SPARSE_MODEL)}
 
 
-@_guarded
+
 def reindex() -> int:
     """Перебудовує колекцію з нуля. KB маленька — інкрементальність тут зайва."""
     qdrant = client()
@@ -78,10 +99,12 @@ def reindex() -> int:
         # modifier=IDF обов'язковий для BM25: без нього Qdrant не рахує зворотну частоту
         sparse_vectors_config={SPARSE: models.SparseVectorParams(modifier=models.Modifier.IDF)},
     )
+    texts = [c["text"] for c in chunks]
+    dense, sparse = embed_dense(texts), embed_sparse(texts)
     qdrant.upsert(
         collection_name=KB_COLLECTION,
         points=[
-            models.PointStruct(id=i, vector=_documents(c["text"]),
+            models.PointStruct(id=i, vector={DENSE: dense[i], SPARSE: sparse[i]},
                                payload={k: c[k] for k in PAYLOAD_FIELDS})
             for i, c in enumerate(chunks)
         ],
@@ -114,24 +137,22 @@ def ensure_indexed() -> None:
     повертає "у базі немає": тули не падають, тести зелені, агент упевнено відповідає,
     що інформації немає. Це найгірший різновид поломки, і коштує він одного count().
     """
-    with _lock:
+    with _index_lock:
         qdrant = client()
         if not qdrant.collection_exists(KB_COLLECTION) or qdrant.count(KB_COLLECTION).count == 0:
             reindex()
 
 
-@_guarded
 def _best_dense_score(query: str, query_filter: models.Filter | None) -> float:
     """Максимальний косинус по dense-гілці — єдиний сигнал з абсолютною шкалою."""
     response = client().query_points(
         collection_name=KB_COLLECTION,
-        query=models.Document(text=query, model=DENSE_MODEL),
+        query=embed_dense([query])[0],
         using=DENSE, limit=1, query_filter=query_filter, with_payload=False,
     )
     return response.points[0].score if response.points else 0.0
 
 
-@_guarded
 def search(query: str, *, limit: int = 5, min_score: float = KB_MIN_DENSE_SCORE, **equals) -> list[dict]:
     """Гібридний пошук з fail-closed відсіванням: порожній список = 'у базі немає'.
 
@@ -146,9 +167,9 @@ def search(query: str, *, limit: int = 5, min_score: float = KB_MIN_DENSE_SCORE,
     response = client().query_points(
         collection_name=KB_COLLECTION,
         prefetch=[
-            models.Prefetch(query=models.Document(text=query, model=DENSE_MODEL),
+            models.Prefetch(query=embed_dense([query])[0],
                             using=DENSE, limit=PREFETCH_LIMIT, filter=query_filter),
-            models.Prefetch(query=models.Document(text=query, model=SPARSE_MODEL),
+            models.Prefetch(query=embed_sparse([query])[0],
                             using=SPARSE, limit=PREFETCH_LIMIT, filter=query_filter),
         ],
         query=models.FusionQuery(fusion=models.Fusion.RRF),

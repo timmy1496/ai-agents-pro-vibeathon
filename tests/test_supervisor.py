@@ -91,3 +91,52 @@ def test_report_renders_evidence_and_sources():
     assert "error rate 34%" in rendered and "PromQL" in rendered, "докази без джерел марні"
     assert "86%" in rendered and "release" in rendered
     assert "2025-10-21" in rendered
+
+
+def test_followup_goes_to_knowledge_not_a_new_investigation(routed):
+    """Уточнююче питання у треді зі звітом не має запускати RCA наново."""
+    app = routed.make("FOLLOWUP", service="demo-chaos-svc")
+    state = app.invoke({"messages": [{"role": "user", "content": "а чи було таке раніше?"}]},
+                       config={"configurable": {"thread_id": "t-followup"}})
+    assert "knowledge_node" in state["messages"][-1].content
+
+
+def test_router_is_told_whether_the_thread_already_has_a_report(monkeypatch):
+    """Роутер не вгадує з тексту: йому прямо кажуть, чи є вже розслідування."""
+    import agents.supervisor as supervisor
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    seen = {}
+
+    class FakeRouter:
+        def invoke(self, messages):
+            seen["prompt"] = messages[-1]["content"]
+            return supervisor.Route(intent="FOLLOWUP", service="demo-chaos-svc")
+
+    monkeypatch.setattr(supervisor, "resolve",
+                        lambda *a, **k: type("M", (), {"with_structured_output":
+                                                       lambda self, schema: FakeRouter()})())
+
+    with_report = {"messages": [
+        HumanMessage(content="алерт"),
+        AIMessage(content="*demo-chaos-svc* — гіпотеза: реліз\nКлас причини: `release`"),
+        HumanMessage(content="а чи було таке раніше?")]}
+    supervisor.route(with_report)
+    assert "ВЖЕ Є звіт" in seen["prompt"]
+
+    without = {"messages": [HumanMessage(content="розберись з алертом")]}
+    supervisor.route(without)
+    assert "звіту ще немає" in seen["prompt"]
+
+
+def test_report_marker_matches_what_render_report_produces():
+    """Якщо формат звіту зміниться, роутер осліпне — тримаємо це тестом."""
+    from agents.incident_agent import Evidence, RCAReport, Verdict
+    from agents.supervisor import REPORT_MARKER, render_report
+
+    rendered = render_report({
+        "report": RCAReport(service="s", root_cause_label="release", hypothesis="h",
+                            confidence=0.9, evidence=[Evidence(fact="f", source="s")],
+                            recommended_actions=["a"]),
+        "revisions": 0, "verdict": Verdict(grounded=True, verdict="ACCEPT")})
+    assert REPORT_MARKER in rendered

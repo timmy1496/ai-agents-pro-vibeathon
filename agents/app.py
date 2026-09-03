@@ -16,10 +16,12 @@ from pydantic import BaseModel
 
 from agents.config import AGENT_TOKEN, AGENT_TOKEN_IS_DEFAULT
 from agents.observability import trace_config
+from agents.config import DATA_DIR
 from agents.supervisor import build_supervisor
 from agents.tools.actions import SLACK_FILE, post_slack
 
 log = logging.getLogger(__name__)
+PROCESSED = DATA_DIR / "processed_alerts.json"
 
 app = FastAPI(title="SRE Agent")
 supervisor = build_supervisor()  # один checkpointer на процес: треди живуть між запитами
@@ -63,6 +65,17 @@ def _handle(text: str, thread_id: str) -> str:
     return answer
 
 
+def _process_alert(summary: str, thread_id: str) -> None:
+    """Оголошення алерту і розслідування — обидва у фоні.
+
+    Публікація в Slack — синхронний мережевий виклик, і в async-ендпоінті вона
+    блокує event loop. Alertmanager дає на нотифікацію кілька секунд і скасовує
+    її по дедлайну, тож у самому обробнику не має лишитись ніякого вводу-виводу.
+    """
+    post_slack.invoke({"thread_id": thread_id, "text": f":rotating_light: {summary}"})
+    _handle(summary, thread_id)
+
+
 @app.post("/webhook/alert", dependencies=[Depends(require_token)])
 async def alertmanager_webhook(payload: dict, background: BackgroundTasks) -> dict:
     """Вхід від Alertmanager. Відповідаємо одразу — розслідування йде у фоні.
@@ -71,17 +84,58 @@ async def alertmanager_webhook(payload: dict, background: BackgroundTasks) -> di
     триває десятки секунд. Тому підтверджуємо прийом, а не результат.
     """
     alerts = payload.get("alerts", [])
-    threads = []
+    threads, skipped = [], 0
     for alert in alerts:
         labels = alert.get("labels", {})
-        # fingerprint від Alertmanager стабільний для однієї групи -> один тред на інцидент
-        thread_id = alert.get("fingerprint") or f"{labels.get('alertname')}-{labels.get('service')}"
+        status = alert.get("status", "firing")
+        thread_id = _incident_id(alert, labels)
+        if _already_handled(thread_id, status):
+            skipped += 1
+            continue
+
         summary = (f"{labels.get('alertname')} {labels.get('severity')} на "
                    f"{labels.get('service')}: {alert.get('annotations', {}).get('summary', '')}")
-        post_slack.invoke({"thread_id": thread_id, "text": f":rotating_light: {summary}"})
-        background.add_task(_handle, summary, thread_id)
+        if status == "resolved":
+            # закриття інциденту — це один рядок у тред, а не привід розслідувати наново
+            background.add_task(post_slack.invoke,
+                                {"thread_id": thread_id,
+                                 "text": f":white_check_mark: {labels.get('alertname')} "
+                                         f"на {labels.get('service')} — вирішено"})
+        else:
+            background.add_task(_process_alert, summary, thread_id)
         threads.append(thread_id)
-    return {"accepted": len(alerts), "threads": threads}
+    return {"accepted": len(threads), "skipped_duplicates": skipped, "threads": threads}
+
+
+def _already_handled(incident_id: str, status: str) -> bool:
+    """Чи вже опрацьовано цей інцидент у цьому статусі.
+
+    Alertmanager повторює нотифікацію кожен repeat_interval, поки алерт горить — це
+    правильно з його боку (якщо агент лежав, повтор донесе алерт). Але для нас другий
+    вебхук про той самий інцидент не є новиною: без цієї перевірки в тред щохвилини
+    падав би новий звіт RCA. Стан на диску, щоб переживати рестарт агента.
+    """
+    processed = json.loads(PROCESSED.read_text()) if PROCESSED.exists() else {}
+    if processed.get(incident_id) == status:
+        return True
+    processed[incident_id] = status
+    PROCESSED.parent.mkdir(parents=True, exist_ok=True)
+    PROCESSED.write_text(json.dumps(processed, indent=2) + "\n")
+    return False
+
+
+def _incident_id(alert: dict, labels: dict) -> str:
+    """Ідентифікатор інциденту = алерт + момент його початку.
+
+    Сам fingerprint для цього не годиться: він стабільний для алерту, тому повторне
+    спрацювання через годину лягло б у тред, створений минулого разу, і в каналі його
+    ніхто б не побачив. startsAt змінюється з кожним новим загорянням після resolve,
+    тож продовження того самого інциденту лишається в одному треді, а новий інцидент
+    відкриває новий.
+    """
+    base = alert.get("fingerprint") or f"{labels.get('alertname')}-{labels.get('service')}"
+    started = alert.get("startsAt", "")[:19]  # до секунд, без часового поясу
+    return f"{base}-{started}" if started else base
 
 
 class Command(BaseModel):

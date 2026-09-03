@@ -12,7 +12,7 @@ import re
 from langchain_core.tools import tool
 
 from agents.config import ALERTMANAGER_URL, DATA_DIR, PROMETHEUS_URL
-from agents.tools.observability import _get
+from agents.tools.observability import _get, _safe_get
 
 
 def _recent(filename: str, service: str | None, hours: int) -> list[dict]:
@@ -51,10 +51,10 @@ def k8s_events(service: str | None = None, hours: int = 6) -> list[dict]:
 @tool
 def get_active_alerts(service: str | None = None) -> list[dict]:
     """Активні алерти з Alertmanager: назва, severity, мітки, з якого часу горить."""
-    try:
-        alerts = _get(f"{ALERTMANAGER_URL}/api/v2/alerts", {"active": "true", "silenced": "false"})
-    except OSError as error:
-        return [{"error": f"alertmanager недоступний: {error}"}]
+    alerts = _safe_get(f"{ALERTMANAGER_URL}/api/v2/alerts",
+                       {"active": "true", "silenced": "false"})
+    if alerts is None:
+        return [{"error": "alertmanager недоступний"}]
 
     return [
         {
@@ -108,10 +108,9 @@ def get_alert_rules(service: str | None = None) -> list[dict]:
     service фільтрує за тим, чи правило СТОСУЄТЬСЯ сервісу, а не за згадкою його імені:
     сервіс-агностичне правило (агрегація `by (service)` без селектора) покриває і його.
     """
-    try:
-        payload = _get(f"{PROMETHEUS_URL}/api/v1/rules", {"type": "alert"})
-    except OSError as error:
-        return [{"error": f"prometheus недоступний: {error}"}]
+    payload = _safe_get(f"{PROMETHEUS_URL}/api/v1/rules", {"type": "alert"})
+    if payload is None:
+        return [{"error": "prometheus недоступний"}]
 
     return [
         {

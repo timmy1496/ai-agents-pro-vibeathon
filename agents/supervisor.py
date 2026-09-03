@@ -11,19 +11,28 @@ from __future__ import annotations
 
 from typing import Literal
 
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from pydantic import BaseModel, Field
 
+from agents.checkpoint import saver
 from agents.config import CHEAP_MODEL
 from agents.models import resolve
 
-Intent = Literal["ALERT", "RCA", "KB", "REVIEW", "RELEASE", "HUMAN"]
+Intent = Literal["ALERT", "RCA", "FOLLOWUP", "KB", "REVIEW", "RELEASE", "HUMAN"]
+
+# Маркер, за яким видно, що в цьому треді вже є розслідування. Потрібен роутеру:
+# уточнююче питання у треді зі звітом — це FOLLOWUP, а не привід розслідувати наново.
+REPORT_MARKER = "Клас причини:"
 
 ROUTER_PROMPT = """Класифікуй запит SRE-інженера в один з намірів:
 
-ALERT   — прийшов алерт або просять розібратись з поточним інцидентом
+ALERT   — прийшов алерт або просять розібратись з НОВИМ інцидентом
 RCA     — просять знайти корене­ву причину чогось, що вже сталося
+FOLLOWUP — уточнююче питання про інцидент, який у цьому треді ВЖЕ розібрано:
+          "а чи було таке раніше?", "що з залежностями?", "покажи runbook", "а деталі?".
+          Обирай FOLLOWUP щоразу, коли у треді вже є звіт, а людина просто питає далі.
+          ALERT тут доречний лише якщо просять розслідувати заново або явно кажуть,
+          що ситуація змінилась.
 KB      — питання по базі знань: постмортеми, runbooks, хто власник, що таке X
 REVIEW  — просять зробити ревізію сервісу, оцінити алерти/логування/ресурси
 RELEASE — просять перевірити метрики після релізу або стежити за викатом
@@ -46,11 +55,18 @@ def _last_user_text(state: SupervisorState) -> str:
     return next(str(m.content) for m in reversed(state["messages"]) if m.type == "human")
 
 
+def _thread_has_report(state: SupervisorState) -> bool:
+    return any(REPORT_MARKER in str(m.content) for m in state["messages"] if m.type == "ai")
+
+
 def route(state: SupervisorState) -> dict:
     router = resolve(CHEAP_MODEL).with_structured_output(Route)
+    context = ("У цьому треді ВЖЕ Є звіт RCA. Якщо це не прохання розслідувати заново — "
+               "це FOLLOWUP." if _thread_has_report(state) else
+               "У цьому треді звіту ще немає.")
     decision = router.invoke([
         {"role": "system", "content": ROUTER_PROMPT},
-        {"role": "user", "content": _last_user_text(state)},
+        {"role": "user", "content": f"{context}\n\nЗапит: {_last_user_text(state)}"},
     ])
     return {"intent": decision.intent, "service": decision.service}
 
@@ -130,7 +146,10 @@ def render_report(outcome: dict) -> str:
 
 
 def _next_node(state: SupervisorState) -> str:
-    return {"ALERT": "incident", "RCA": "incident", "KB": "knowledge",
+    # FOLLOWUP іде в knowledge: у нього є і база знань, і вся історія треда,
+    # тому він відповідає на уточнення, не переробляючи розслідування з нуля.
+    return {"ALERT": "incident", "RCA": "incident",
+            "FOLLOWUP": "knowledge", "KB": "knowledge",
             "REVIEW": "review", "RELEASE": "release"}.get(state["intent"], "human")
 
 
@@ -149,7 +168,7 @@ def build_supervisor(checkpointer=None):
     for node in ("knowledge", "incident", "review", "release", "human"):
         graph.add_edge(node, END)
 
-    return graph.compile(checkpointer=checkpointer or InMemorySaver())
+    return graph.compile(checkpointer=checkpointer or saver())
 
 
 if __name__ == "__main__":
