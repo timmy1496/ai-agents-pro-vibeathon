@@ -45,9 +45,13 @@ def handle_event(event: dict, supervisor, post) -> str | None:
     thread_ts = event.get("thread_ts") or event["ts"]
     slack.remember_thread(thread_ts, thread_ts)
 
+    # Якщо це тред інциденту, розмову треба продовжити під ключем самого інциденту —
+    # інакше питання «а чи було таке раніше?» приходить у порожній контекст.
+    conversation_id = slack.incident_for_thread(thread_ts) or thread_ts
+
     post(channel=channel, thread_ts=thread_ts, text=THINKING)
     state = supervisor.invoke({"messages": [{"role": "user", "content": question}]},
-                              config=trace_config(thread_ts, tags=["slack"]))
+                              config=trace_config(conversation_id, tags=["slack"]))
     answer = state["messages"][-1].content
     post(channel=channel, thread_ts=thread_ts, text=answer)
     return answer

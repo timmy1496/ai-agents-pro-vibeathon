@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from pydantic import BaseModel, Field
 
+from agents.checkpoint import saver
 from agents.config import CHEAP_MODEL
 from agents.models import resolve
 
@@ -152,7 +152,7 @@ def build_supervisor(checkpointer=None):
     for node in ("knowledge", "incident", "review", "release", "human"):
         graph.add_edge(node, END)
 
-    return graph.compile(checkpointer=checkpointer or InMemorySaver())
+    return graph.compile(checkpointer=checkpointer or saver())
 
 
 if __name__ == "__main__":

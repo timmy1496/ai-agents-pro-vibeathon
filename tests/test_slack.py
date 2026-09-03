@@ -110,3 +110,15 @@ def test_token_problems_are_named_before_the_request(token, expected):
 
     problem = slack.check_token(token, "xoxb-", "SLACK_BOT_TOKEN")
     assert expected in problem if expected else problem == ""
+
+
+def test_incident_lookup_by_slack_thread(slack_api):
+    from agents.tools import slack
+
+    slack.remember_thread("incident-abc-2026-09-03T20:00:00", "1788465633.877759")
+    slack.remember_thread("1788465633.877759", "1788465633.877759")  # самопосилання від згадки
+
+    found = slack.incident_for_thread("1788465633.877759")
+    assert found == "incident-abc-2026-09-03T20:00:00", \
+        "самопосилання не має перемагати справжній інцидент"
+    assert slack.incident_for_thread("невідомий-ts") is None

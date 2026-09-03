@@ -82,3 +82,37 @@ def test_events_that_must_be_ignored(posted, event):
     supervisor = FakeSupervisor()
     assert handle_event(event, supervisor, post) is None
     assert not sent and not supervisor.seen
+
+
+def test_mention_in_incident_thread_continues_that_conversation(posted, monkeypatch):
+    """Питання «а чи було таке раніше?» має прийти в контекст розслідування.
+
+    Розслідування ведеться під ключем інциденту, а згадка приходить із ts треда Slack.
+    Без зв'язку між ними агент отримує порожній контекст і чесно каже, що не розуміє.
+    """
+    from agents.slack_bot import handle_event
+    from agents.tools import slack
+
+    _, post = posted
+    slack.remember_thread("473522ec-2026-09-03T20:00:31", "1788465633.877759")
+
+    supervisor = FakeSupervisor()
+    handle_event({"type": "message", "text": "<@U1> а чи було таке раніше?",
+                  "channel": "C1", "ts": "1788465700.1",
+                  "thread_ts": "1788465633.877759"}, supervisor, post)
+
+    _, config = supervisor.seen[0]
+    assert config["configurable"]["thread_id"] == "473522ec-2026-09-03T20:00:31", \
+        "розмова має продовжитись під ключем інциденту, а не ts треда"
+
+
+def test_mention_outside_any_incident_uses_the_thread_itself(posted):
+    from agents.slack_bot import handle_event
+
+    _, post = posted
+    supervisor = FakeSupervisor()
+    handle_event({"type": "app_mention", "text": "<@U1> хто власник cart-service?",
+                  "channel": "C1", "ts": "1700.1"}, supervisor, post)
+
+    _, config = supervisor.seen[0]
+    assert config["configurable"]["thread_id"] == "1700.1"

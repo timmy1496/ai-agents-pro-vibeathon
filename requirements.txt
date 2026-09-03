@@ -10,3 +10,4 @@ langchain-openai>=0.3
 fastapi>=0.115
 uvicorn>=0.34
 slack_sdk>=3.33         # Socket Mode: Slack тримає WebSocket до нас, публічний URL не потрібен
+langgraph-checkpoint-sqlite>=2.0   # спільна пам'ять тредів між процесами агента і слухача Slack

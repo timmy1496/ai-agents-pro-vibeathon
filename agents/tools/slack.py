@@ -85,6 +85,17 @@ def remember_thread(thread_id: str, thread_ts: str) -> None:
         _save_map(mapping)
 
 
+def incident_for_thread(thread_ts: str) -> str | None:
+    """Зворотний пошук: якому інциденту належить цей тред Slack.
+
+    Мапа зберігає incident_id -> ts. Коли людина пише у тред, ми знаємо лише ts,
+    а продовжувати треба розмову інциденту — інакше згадка не бачить розслідування.
+    """
+    matches = [key for key, value in _load_map().items()
+               if value == thread_ts and key != thread_ts]
+    return matches[0] if matches else None
+
+
 def post(thread_id: str, text: str, channel: str = "") -> dict:
     """Пише в тред інциденту, створюючи його першим повідомленням.
 
