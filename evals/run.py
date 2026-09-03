@@ -30,6 +30,25 @@ DOCS = pathlib.Path(__file__).resolve().parent.parent / "docs"
 
 
 def run_case(case: dict, with_judge: bool, tmp: pathlib.Path) -> dict:
+    """Один кейс. Виняток тут — результат кейса, а не аварія прогону.
+
+    Прогін коштує десятки хвилин і сотні викликів; падати на сьомому кейсі з чотирнадцяти
+    і втрачати вже зроблену роботу — найдорожчий спосіб дізнатись, що агент десь зламався.
+    Кейс, який не доїхав, чесно рахується як провал (root_cause_match=False,
+    grounded=False) і несе причину в рядку звіту — це видно і в підсумку, і в HTML.
+    """
+    try:
+        return _run_case(case, with_judge, tmp)
+    except Exception as error:  # noqa: BLE001 — саме тут ловимо все
+        return {
+            "case_id": case["id"], "root_cause": "—", "root_cause_match": False,
+            "tools_called": [], "missing_tools": sorted(case.get("expect_tools", [])),
+            "revisions": 0, "grounded": False,
+            "error": f"{type(error).__name__}: {error}"[:500],
+        }
+
+
+def _run_case(case: dict, with_judge: bool, tmp: pathlib.Path) -> dict:
     from evals.runner import run_online
 
     monkeypatch = pytest.MonkeyPatch()
@@ -175,12 +194,14 @@ def main(argv: list[str] | None = None) -> int:
     tmp = REPORTS / "_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
     rows = []
+    print(f"кейсів: {len(selected)}\n", flush=True)
     for case in selected:
         row = run_case(case, not args.no_judge, tmp)
         rows.append(row)
-        status = "ok" if row["root_cause_match"] else "MISS"
+        status = "ok" if row["root_cause_match"] else ("ERR" if row.get("error") else "MISS")
         print(f"[{status:4}] {row['case_id']:8} причина={row['root_cause']:11} "
-              f"пропущені тули={row['missing_tools'] or '-'}")
+              f"пропущені тули={row['missing_tools'] or '-'}"
+              + (f"\n       {row['error']}" if row.get("error") else ""), flush=True)
 
     summary = summarise(rows)
     previous = previous_report()

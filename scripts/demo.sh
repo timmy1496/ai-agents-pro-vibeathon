@@ -122,4 +122,4 @@ fi
 
 echo
 bold "Демо завершено."
-dim "Звіт евалів для слайдів: make eval-online (потрібен ключ) -> docs/eval-report.html"
+dim "Звіт евалів для слайдів: make eval-online -> docs/eval-report.html"

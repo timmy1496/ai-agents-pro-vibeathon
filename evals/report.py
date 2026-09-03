@@ -160,8 +160,12 @@ def _case_rows(rows: list[dict], dimensions: dict) -> str:
     cells = []
     for row in rows:
         matched = row.get("root_cause_match")
-        verdict = ('<span class="ok">✓ збіг</span>' if matched
-                   else '<span class="miss">✗ розбіжність</span>')
+        if row.get("error"):
+            verdict = ('<span class="miss">✗ не доїхав</span><br>'
+                       f'<span class=dim>{html.escape(row["error"][:160])}</span>')
+        else:
+            verdict = ('<span class="ok">✓ збіг</span>' if matched
+                       else '<span class="miss">✗ розбіжність</span>')
         missing = row.get("missing_tools") or []
         tools = ("<span class=dim>усі</span>" if not missing
                  else f'<span class="miss">−{len(missing)}</span> '
@@ -182,7 +186,10 @@ def _case_rows(rows: list[dict], dimensions: dict) -> str:
 
         cells.append(
             f"<tr><td><code>{html.escape(row['case_id'])}</code></td>"
-            f"<td>{verdict}<br><span class=dim>{html.escape(str(row.get('root_cause', '—')))}</span></td>"
+            f"<td>{verdict}"
+            + ("" if row.get("error") else
+               f"<br><span class=dim>{html.escape(str(row.get('root_cause', '—')))}</span>")
+            + "</td>"
             f"<td>{tools}</td>"
             f"<td>{html.escape(', '.join(scores)) or '<span class=dim>—</span>'}{rationale}</td>"
             f"<td>{row.get('revisions', 0)}</td></tr>")

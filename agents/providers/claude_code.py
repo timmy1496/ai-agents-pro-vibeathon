@@ -74,7 +74,16 @@ TOOL_CHOICE_FORCED = """
 
 
 class ClaudeCodeError(RuntimeError):
-    """CLI не відповів або відповів не за протоколом."""
+    """CLI не відповів або відповів не за протоколом.
+
+    `raw` несе те, що модель насправді сказала. Це не для логів: коли модель написала
+    змістовну відповідь, але не в тій формі, з цього тексту ще можна врятувати
+    результат — і краще перекласти його у форму, ніж викидати роботу і перепитувати.
+    """
+
+    def __init__(self, message: str, raw: str = "") -> None:
+        super().__init__(message)
+        self.raw = raw
 
 
 def _strip_fence(text: str) -> str:
@@ -93,7 +102,7 @@ def _first_object(text: str) -> dict:
     # падати через один зайвий рядок пояснення дорожче, ніж його пережити.
     start = body.find("{")
     if start == -1:
-        raise ClaudeCodeError(f"у відповіді немає JSON: {body[:400]!r}")
+        raise ClaudeCodeError(f"у відповіді немає JSON: {body[:400]!r}", raw=text)
     depth, in_string, escaped = 0, False, False
     for index, char in enumerate(body[start:], start):
         if in_string:
@@ -108,7 +117,7 @@ def _first_object(text: str) -> dict:
             depth -= 1
             if depth == 0:
                 return json.loads(body[start:index + 1])
-    raise ClaudeCodeError(f"незакритий JSON: {body[:400]!r}")
+    raise ClaudeCodeError(f"незакритий JSON: {body[:400]!r}", raw=text)
 
 
 def _render(message: BaseMessage) -> str:
@@ -270,17 +279,46 @@ class ClaudeCodeChatModel(BaseChatModel):
         try:
             message = attempt(prompt)
         except ClaudeCodeError as first:
-            # Одна повторна спроба з нагадуванням про формат. Під ретрай підпадає ВЕСЬ
-            # шлях, включно з розбором і приведенням до tool_call: найчастіше протокол
-            # ламається саме на останньому кроці, коли модель захоплюється відповіддю і
-            # пише її прозою замість того, щоб покласти у форму. Одна нагадувальна
-            # спроба дешевша за втрачений кейс евала; друга поспіль помилка йде нагору.
-            message = attempt(
-                f"{prompt}\n\n[СИСТЕМА] Попередня спроба не дала валідної відповіді "
-                f"({first}). Поверни РІВНО один JSON-об'єкт за протоколом і нічого більше: "
-                f"жодного markdown, жодного тексту поза JSON.")
+            message = self._recover(system, prompt, first, attempt)
 
         return ChatResult(generations=[ChatGeneration(message=message)])
+
+    def _recover(self, system: str, prompt: str, failure: ClaudeCodeError,
+                 attempt: Any) -> AIMessage:
+        """Друга спроба після зламаного протоколу — і вона не однакова для двох випадків.
+
+        Найчастіший збій — останній крок агента: модель написала змістовний звіт, але
+        прозою з markdown, бо їй так природніше, ніж класти текст у поля схеми. Просто
+        перепитати «ще раз, але за формою» слабо працює: модель знову захоплюється
+        відповіддю. Тому тут ОКРЕМИЙ вузький виклик, у якого одна робота — перекласти
+        вже написаний текст у JSON за схемою. Це набагато простіше завдання, і воно
+        зберігає роботу моделі замість того, щоб її викидати.
+
+        Коли рятувати нема чого (немає тексту або інструментів кілька), лишається
+        звичайне нагадування про формат.
+        """
+        if failure.raw and self.force_tool_call and len(self.tools) == 1:
+            function = self.tools[0]["function"]
+            schema = json.dumps(function.get("parameters", {}), ensure_ascii=False)
+            reformat = self.model_copy(update={"tools": [], "force_tool_call": False})
+            reformat.spend = self.spend
+            payload = reformat._run_cli(
+                "Ти перекладаєш готову відповідь у структуру. Нічого не вигадуй, нічого "
+                "не втрачай, нічого не оцінюй: усе, що потрібно, вже є в тексті нижче.\n"
+                "Поверни РІВНО один JSON-об'єкт за схемою і нічого крім нього.",
+                f"СХЕМА:\n{schema}\n\nТЕКСТ, ЯКИЙ ТРЕБА ПЕРЕКЛАСТИ У ЦЮ СХЕМУ:\n{failure.raw}")
+            fields = _first_object(str(payload.get("result", "")))
+            return AIMessage(
+                content="",
+                tool_calls=[{"name": function["name"], "args": fields,
+                             "id": "cc_reformat", "type": "tool_call"}],
+                response_metadata=_usage(payload.get("usage", {})),
+            )
+
+        return attempt(
+            f"{prompt}\n\n[СИСТЕМА] Попередня спроба не дала валідної відповіді "
+            f"({failure}). Поверни РІВНО один JSON-об'єкт за протоколом і нічого більше: "
+            f"жодного markdown, жодного тексту поза JSON.")
 
     def _to_message(self, decision: dict, usage: dict) -> AIMessage:
         metadata = _usage(usage)
@@ -297,9 +335,10 @@ class ClaudeCodeChatModel(BaseChatModel):
                 response_metadata=metadata,
             )
         if self.force_tool_call:
+            content = str(decision.get("content", ""))
             raise ClaudeCodeError(
-                "на цьому кроці був обов'язковий tool_call, а модель віддала текст: "
-                f"{str(decision.get('content'))[:300]!r}")
+                f"на цьому кроці був обов'язковий tool_call, а модель віддала текст: "
+                f"{content[:300]!r}", raw=content)
         return AIMessage(content=str(decision.get("content", "")), response_metadata=metadata)
 
     def _salvage_forced_call(self, decision: dict) -> list[dict]:
