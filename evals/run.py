@@ -88,6 +88,11 @@ def summarise(rows: list[dict]) -> dict:
         value = judging.average(rows, dimension)
         if value is not None:
             summary[dimension] = value
+
+    attempted = sum(1 for r in rows for entry in (r.get("judge") or {}).values()
+                    if "score" in entry or "error" in entry)
+    if attempted:
+        summary["unscored_rate"] = round(judging.unscored(rows) / attempted, 3)
     return summary
 
 
@@ -110,6 +115,13 @@ def check_gate(summary: dict, previous: dict | None) -> list[str]:
                             ("min_actionability", "actionability"))
         if metric in summary and summary[metric] < thresholds[key]
     ]
+    # Окремо і в інший бік: тут погано, коли ВИЩЕ порогу. Це не оцінка агента, а
+    # надійність вимірювання — зелена метрика, порахована по половині кейсів, гірша
+    # за чесно червону.
+    if summary.get("unscored_rate", 0) > thresholds["max_unscored"]:
+        failures.append(
+            f"не виміряно {summary['unscored_rate']:.1%} вимірів при стелі "
+            f"{thresholds['max_unscored']:.0%} — метрикам цього прогону вірити не можна")
     if previous:
         failures += [
             f"{metric} впав на {previous[metric] - summary[metric]:.3f} "

@@ -128,7 +128,7 @@ def test_gate_thresholds_are_all_declared():
     required = {
         "min_root_cause_accuracy", "min_tool_recall", "min_grounded_rate",
         "min_self_completed", "min_correctness", "min_groundedness",
-        "min_actionability", "max_drop",
+        "min_actionability", "max_drop", "max_unscored",
     }
     assert required <= set(config.gate())
     assert all(0.0 <= value <= 1.0 for value in config.gate().values())

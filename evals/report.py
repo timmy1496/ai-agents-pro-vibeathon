@@ -135,7 +135,8 @@ def _tile(name: str, value: Any, previous: Any, hint: str, as_percent: bool = Tr
             f'<div class="hint">{html.escape(hint)}</div></div>')
 
 
-def _bars(summary: dict, dimensions: dict, na_counts: dict[str, int]) -> str:
+def _bars(summary: dict, dimensions: dict, na_counts: dict[str, int],
+          broken_counts: dict[str, int]) -> str:
     rows = []
     for name in dimensions:
         value = summary.get(name)
@@ -148,6 +149,9 @@ def _bars(summary: dict, dimensions: dict, na_counts: dict[str, int]) -> str:
             continue
         skipped = na_counts.get(name, 0)
         note = f", n/a на {skipped} кейсах" if skipped else ""
+        broken = broken_counts.get(name, 0)
+        if broken:
+            note += f", не виміряно на {broken}"
         rows.append(
             f'<div class="bar-row"><div class="bar-name">{html.escape(name)}</div>'
             f'<div class="track" title="{value:.2f} з 1.00{note}">'
@@ -178,6 +182,10 @@ def _case_rows(rows: list[dict], dimensions: dict) -> str:
                 scores.append(f"{name} {entry['score']:.2f}")
                 details.append(f"<p><b>{html.escape(name)} {entry['score']:.2f}</b> — "
                                f"{html.escape(entry['rationale'])}</p>")
+            elif "error" in entry:
+                scores.append(f"{name} не виміряно")
+                details.append(f"<p><b>{html.escape(name)}</b> — не виміряно: "
+                               f"{html.escape(str(entry['error']))}</p>")
             elif "na" in entry and not entry.get("structural"):
                 details.append(f"<p><b>{html.escape(name)}</b> — n/a: "
                                f"{html.escape(str(entry['na']))}</p>")
@@ -204,6 +212,12 @@ def _na_counts(rows: list[dict], dimensions: dict) -> dict[str, int]:
                   and not r["judge"][name].get("structural"))
         for name in dimensions
     }
+
+
+def _broken_counts(rows: list[dict], dimensions: dict) -> dict[str, int]:
+    """Скільки разів вимір не вдалося виміряти. Це не n/a і не нуль — окрема категорія."""
+    return {name: sum(1 for r in rows if "error" in (r.get("judge") or {}).get(name, {}))
+            for name in dimensions}
 
 
 def render(report: dict, previous: dict | None) -> str:
@@ -289,7 +303,7 @@ def render(report: dict, previous: dict | None) -> str:
 <p class="sub">Один виклик на вимір, міркування перед оцінкою. Вимір без знаменника
 віддає n/a і в середнє не входить — інакше чесна відмова агента каралась би так само,
 як безпорадний звіт.</p>
-{_bars(summary, dimensions, _na_counts(rows, dimensions))}
+{_bars(summary, dimensions, _na_counts(rows, dimensions), _broken_counts(rows, dimensions))}
 
 <h2>Покейсово</h2>
 <div class="card" style="padding:.35rem .5rem">

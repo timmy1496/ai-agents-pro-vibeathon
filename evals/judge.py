@@ -23,6 +23,27 @@ from typing import Any
 from evals import config
 
 
+class Unscored:
+    """Вимір, який не вдалося виміряти. Це НЕ n/a і НЕ нуль.
+
+    n/a означає «знаменника немає» — правильний стан. Unscored означає «знаменник є,
+    але інструмент зламався»: суддя відповів прозою замість JSON, обірвався виклик.
+    Плутати їх не можна в жодну сторону: як нуль це занизило б оцінку агента, як n/a —
+    сховало б поломку вимірювання за чистою метрикою.
+    """
+
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def __repr__(self) -> str:
+        return f"unscored({self.reason})"
+
+    def as_dict(self) -> dict:
+        return {"error": self.reason}
+
+
 class NotApplicable:
     """Вимір без знаменника. Окремий тип, щоб його не можна було випадково скласти з 0."""
 
@@ -90,31 +111,60 @@ def _parse(raw: str, dimension: str) -> Score | NotApplicable:
     return Score(value, str(payload["rationale"]))
 
 
+REMINDER = ('\n\n[СИСТЕМА] Попередня відповідь була не за контрактом. Поверни РІВНО '
+            'один JSON-об\'єкт {"rationale": …, "score": …} і нічого крім нього: '
+            'без markdown, без заголовків, без тексту поза JSON.')
+
+
 def score_dimension(name: str, case: dict, report: Any, tool_log: str,
-                    model: str | None = None) -> Score | NotApplicable:
-    """Один вимір — один виклик судді."""
+                    model: str | None = None) -> Score | NotApplicable | Unscored:
+    """Один вимір — один виклик судді, з однією повторною спробою на порушення контракту.
+
+    Суддя час від часу відповідає прозою з markdown-заголовками замість JSON. Без
+    ретраю це коштувало цілого кейса: агент відпрацював, звіт є, а рядок прогону
+    втрачався на кроці вимірювання.
+    """
     if not config.applicable(name, case):
         return NotApplicable(f"вимір не застосовний до кейса виду {case.get('kind')}",
                              structural=True)
 
     from agents.models import resolve
 
-    prompt = f"{config.system_prompt()}\n\n---\n\n{config.dimension_prompt(name)}"
-    answer = resolve(model or config.judge_model()).invoke([
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": _artifacts(case, report, tool_log)},
-    ])
-    return _parse(str(answer.content), name)
+    grader = resolve(model or config.judge_model())
+    system = f"{config.system_prompt()}\n\n---\n\n{config.dimension_prompt(name)}"
+    artifacts = _artifacts(case, report, tool_log)
+
+    for attempt_text in (artifacts, artifacts + REMINDER):
+        answer = grader.invoke([{"role": "system", "content": system},
+                                {"role": "user", "content": attempt_text}])
+        try:
+            return _parse(str(answer.content), name)
+        except (ValueError, json.JSONDecodeError) as error:
+            last = error
+    return Unscored(f"суддя двічі відповів не за контрактом: {last}"[:300])
 
 
 def judge(case: dict, report: Any, tool_log: str,
           model: str | None = None) -> dict[str, dict]:
-    """Усі застосовні виміри кейса. Гард рубрики — перед першим витраченим токеном."""
+    """Усі застосовні виміри кейса. Гард рубрики — перед першим витраченим токеном.
+
+    Збій одного виміру не забирає інші й не забирає кейс: агент свою роботу вже зробив,
+    і детерміновані метрики по ньому лишаються дійсними.
+    """
     config.check_rubric_integrity()
-    return {
-        name: score_dimension(name, case, report, tool_log, model).as_dict()
-        for name in config.dimensions()
-    }
+    scores = {}
+    for name in config.dimensions():
+        try:
+            scores[name] = score_dimension(name, case, report, tool_log, model).as_dict()
+        except Exception as error:  # noqa: BLE001 — обрив виклику теж не має валити кейс
+            scores[name] = Unscored(f"{type(error).__name__}: {error}"[:300]).as_dict()
+    return scores
+
+
+def unscored(rows: list[dict]) -> int:
+    """Скільки вимірів не вдалося виміряти. Нуль у знаменнику надійності прогону."""
+    return sum(1 for r in rows for entry in (r.get("judge") or {}).values()
+               if "error" in entry)
 
 
 def average(rows: list[dict], dimension: str) -> float | None:
