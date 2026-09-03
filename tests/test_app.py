@@ -68,7 +68,7 @@ def test_webhook_schedules_work_instead_of_doing_it(monkeypatch, tmp_path):
     monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
     scheduled = []
     monkeypatch.setattr(app_module, "_process_alert",
-                        lambda summary, thread_id: scheduled.append(thread_id))
+                        lambda summary, thread_id, alertname="": scheduled.append(thread_id))
 
     with TestClient(app_module.app) as http:
         http.post("/webhook/alert", json={"alerts": [{

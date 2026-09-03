@@ -23,6 +23,7 @@ def isolated_state(monkeypatch, tmp_path):
     """
     import agents.app as app_module
     import agents.checkpoint as checkpoint
+    from agents import jokes
     import agents.tools.actions as actions
     from agents.tools import slack
 
@@ -30,6 +31,9 @@ def isolated_state(monkeypatch, tmp_path):
     # між прогонами і тести починають бачити чужі повідомлення
     checkpoint.saver.cache_clear()
     monkeypatch.setattr(checkpoint, "CHECKPOINT_DB", tmp_path / "checkpoints.sqlite")
+    # Жарт — оздоблення, а не частина потоку інциденту: тести цього потоку не мають
+    # ламатись від зміни списку жартів. test_jokes вмикає їх у себе явно.
+    monkeypatch.setattr(jokes, "JOKES_ENABLED", False)
     monkeypatch.setattr(app_module, "PROCESSED", tmp_path / "processed_alerts.json")
     monkeypatch.setattr(app_module, "SLACK_FILE", tmp_path / "slack_threads.json")
     monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack_threads.json")
