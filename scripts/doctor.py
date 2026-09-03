@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -64,16 +65,53 @@ def check_alert_rules(prometheus: str) -> Check:
     except OSError as error:
         return Check("правила алертів", False, "", f"Prometheus недоступний: {error}")
 
-    names = [rule["name"] for group in payload["data"]["groups"]
-             for rule in group["rules"] if rule.get("type") == "alerting"]
+    loaded = {rule["name"]: rule.get("duration", 0)
+              for group in payload["data"]["groups"]
+              for rule in group["rules"] if rule.get("type") == "alerting"}
+
     expected = {"HighErrorRate", "HighLatencyP95", "FrequentRestarts", "HighMemoryUsage"}
-    missing = expected - set(names)
+    missing = expected - set(loaded)
     if missing:
-        return Check("правила алертів", False, f"завантажено {len(names)}",
+        return Check("правила алертів", False, f"завантажено {len(loaded)}",
                      f"немає правил {sorted(missing)} — перевір синтаксис "
                      f"infra/prometheus/rules/alerts.yml і зроби "
                      f"`curl -X POST {prometheus}/-/reload`")
-    return Check("правила алертів", True, f"{len(names)} правил, усі golden signals")
+
+    # Окремо: чи те, що віддає Prometheus, збігається з тим, що лежить у файлі.
+    # Змонтований файл змінюється без перезапуску контейнера, і без /-/reload
+    # Prometheus далі мовчки віддає старі правила. Це вже стріляло: після правки
+    # alerts.yml ревізія A3 бачила чотири правила зі старими `for` і виглядала
+    # правдоподібно — а стенд жив за іншими.
+    stale = _stale_rules(loaded)
+    if stale:
+        return Check("правила алертів", False, f"{len(loaded)} правил, але застарілі",
+                     f"Prometheus віддає не те, що у файлі ({', '.join(stale)}) — "
+                     f"`curl -X POST {prometheus}/-/reload`")
+    return Check("правила алертів", True, f"{len(loaded)} правил, збігаються з файлом")
+
+
+RULES_FILE = pathlib.Path(__file__).resolve().parent.parent / "infra/prometheus/rules/alerts.yml"
+
+
+def _stale_rules(loaded: dict[str, float]) -> list[str]:
+    """Імена правил, чий `for` у Prometheus розійшовся з файлом."""
+    import yaml
+
+    if not RULES_FILE.exists():
+        return []
+    groups = yaml.safe_load(RULES_FILE.read_text(encoding="utf-8"))["groups"]
+    drifted = []
+    for group in groups:
+        for rule in group["rules"]:
+            name = rule["alert"]
+            if name in loaded and loaded[name] != _seconds(str(rule.get("for", "0s"))):
+                drifted.append(name)
+    return drifted
+
+
+def _seconds(duration: str) -> float:
+    units = {"s": 1, "m": 60, "h": 3600}
+    return float(duration.rstrip("smh") or 0) * units.get(duration[-1], 1)
 
 
 def check_metrics(prometheus: str, service: str) -> Check:

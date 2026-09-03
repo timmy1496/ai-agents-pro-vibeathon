@@ -250,3 +250,23 @@ def test_alert_without_for_lowers_the_score(backend):
     without_for = check_alerts("demo-chaos-svc")["score"]
 
     assert without_for < with_for, "алерт без for будить людину на одиничному викиді"
+
+
+def test_doctor_notices_prometheus_serving_stale_rules():
+    """Демо-пастка: змонтований файл змінили, Prometheus не перечитав.
+
+    Правки в alerts.yml не доїжджають у Prometheus без /-/reload, і він далі мовчки
+    віддає старі правила. Це вже стріляло: після мерджу ревізія A3 бачила чотири
+    правила зі старими `for`, виглядала правдоподібно — а стенд жив за іншими.
+    """
+    from scripts.doctor import _seconds, _stale_rules
+
+    actual = {r["alert"]: _seconds(str(r.get("for", "0s"))) for r in stand_rules_raw()}
+    assert not _stale_rules(actual), "файл сам із собою розходитись не може"
+
+    drifted = {name: value + 60 for name, value in actual.items()}
+    assert set(_stale_rules(drifted)) == set(actual), "розбіжність по `for` має бути помічена"
+
+
+def stand_rules_raw() -> list[dict]:
+    return [r for g in yaml.safe_load(STAND_RULES.read_text())["groups"] for r in g["rules"]]
