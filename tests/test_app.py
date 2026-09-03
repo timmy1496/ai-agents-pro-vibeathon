@@ -74,3 +74,26 @@ def test_webhook_schedules_work_instead_of_doing_it(monkeypatch, tmp_path):
             "annotations": {}}]})
 
     assert scheduled == ["f1"], "уся робота має йти через _process_alert у фоні"
+
+
+def test_repeated_firing_opens_a_new_thread(client):
+    """Той самий алерт, що загорівся вдруге, — це новий інцидент і новий тред.
+
+    Інакше повідомлення лягає у тред з минулого прогону і в каналі його не видно.
+    """
+    from agents.app import _incident_id
+
+    labels = {"alertname": "HighErrorRate", "service": "demo-chaos-svc"}
+    first = _incident_id({"fingerprint": "abc", "startsAt": "2026-09-03T10:00:00.000Z"}, labels)
+    same = _incident_id({"fingerprint": "abc", "startsAt": "2026-09-03T10:00:00.000Z"}, labels)
+    later = _incident_id({"fingerprint": "abc", "startsAt": "2026-09-03T14:30:00.000Z"}, labels)
+
+    assert first == same, "продовження того самого інциденту — той самий тред"
+    assert first != later, "нове загоряння після resolve — новий тред"
+
+
+def test_incident_id_without_fingerprint_still_works(client):
+    from agents.app import _incident_id
+
+    generated = _incident_id({}, {"alertname": "A", "service": "s"})
+    assert generated == "A-s", "без fingerprint і startsAt лишається читабельний ключ"

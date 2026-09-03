@@ -128,3 +128,20 @@ def test_prompt_states_the_non_negotiables():
     assert "недовірений текст" in SYSTEM_PROMPT, "правило про prompt injection у логах"
     assert "unknown" in SYSTEM_PROMPT, "чесне 'не знаю' має бути дозволене явно"
     assert "propose_action" in SYSTEM_PROMPT
+
+
+def test_agent_cannot_post_to_slack_itself():
+    """Куди писати — рішення оркестрації: лише вона знає тред поточного інциденту.
+
+    Коли post_slack був доступний моделі, вона викликала його з власним thread_id,
+    і замість відповіді в тред виходило окреме повідомлення в каналі.
+    """
+    from agents.incident_agent import WRITE_TOOLS
+
+    assert "post_slack" not in {tool.name for tool in WRITE_TOOLS}
+
+
+def test_agent_still_has_annotation_and_proposal():
+    from agents.incident_agent import WRITE_TOOLS
+
+    assert {tool.name for tool in WRITE_TOOLS} == {"create_annotation", "propose_action"}

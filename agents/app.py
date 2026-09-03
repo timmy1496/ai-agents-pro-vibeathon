@@ -50,13 +50,26 @@ async def alertmanager_webhook(payload: dict, background: BackgroundTasks) -> di
     threads = []
     for alert in alerts:
         labels = alert.get("labels", {})
-        # fingerprint від Alertmanager стабільний для однієї групи -> один тред на інцидент
-        thread_id = alert.get("fingerprint") or f"{labels.get('alertname')}-{labels.get('service')}"
+        thread_id = _incident_id(alert, labels)
         summary = (f"{labels.get('alertname')} {labels.get('severity')} на "
                    f"{labels.get('service')}: {alert.get('annotations', {}).get('summary', '')}")
         background.add_task(_process_alert, summary, thread_id)
         threads.append(thread_id)
     return {"accepted": len(alerts), "threads": threads}
+
+
+def _incident_id(alert: dict, labels: dict) -> str:
+    """Ідентифікатор інциденту = алерт + момент його початку.
+
+    Сам fingerprint для цього не годиться: він стабільний для алерту, тому повторне
+    спрацювання через годину лягло б у тред, створений минулого разу, і в каналі його
+    ніхто б не побачив. startsAt змінюється з кожним новим загорянням після resolve,
+    тож продовження того самого інциденту лишається в одному треді, а новий інцидент
+    відкриває новий.
+    """
+    base = alert.get("fingerprint") or f"{labels.get('alertname')}-{labels.get('service')}"
+    started = alert.get("startsAt", "")[:19]  # до секунд, без часового поясу
+    return f"{base}-{started}" if started else base
 
 
 class Command(BaseModel):

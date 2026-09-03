@@ -89,5 +89,19 @@
     "author": "demo",
     "commit": "deadbee",
     "ts": "2026-09-03T19:34:11Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T19:36:29Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T19:40:53Z"
   }
 ]

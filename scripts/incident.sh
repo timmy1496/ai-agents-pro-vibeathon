@@ -41,6 +41,10 @@ case "${1:-}" in
     curl -sf -X POST "$CHAOS/chaos/reset" && echo
     # маркер витоку прибирає сам /chaos/reset, тому рестарт уже чистий
     docker compose restart chaos-svc >/dev/null && echo "chaos-svc перезапущено"
+    # journal нотифікацій Alertmanager переживає restart, тому саме перестворення:
+    # інакше наступний прогін демо мовчить, бо групу вже нотифіковано
+    docker compose up -d --force-recreate alertmanager >/dev/null 2>&1 \
+      && echo "alertmanager перестворено (стан нотифікацій чистий)"
     ;;
   *)
     echo "usage: $0 <1|2|3|reset>" >&2
