@@ -134,7 +134,16 @@ def _first_object(text: str) -> dict:
         elif char == "}":
             depth -= 1
             if depth == 0:
-                return json.loads(body[start:index + 1])
+                candidate = body[start:index + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError as error:
+                    # Найчастіше — Python-словник замість JSON: одинарні лапки, True/None.
+                    # Голий JSONDecodeError звідси летів повз ретрай, бо той ловив лише
+                    # ClaudeCodeError, і кейс евала помирав на дрібниці форматування.
+                    raise ClaudeCodeError(
+                        f"схоже на об'єкт, але не JSON: {candidate[:300]!r} ({error})",
+                        raw=text) from error
     raise ClaudeCodeError(f"незакритий JSON: {body[:400]!r}", raw=text)
 
 
@@ -322,8 +331,14 @@ class ClaudeCodeChatModel(BaseChatModel):
                 except ToolAttempt:
                     continue
             raise
-        except ClaudeCodeError as first:
-            message = self._recover(system, prompt, first, attempt)
+        except Exception as first:
+            # Ловимо ВСЕ, не лише ClaudeCodeError. Провайдер зобов'язаний або віддати
+            # придатне повідомлення, або впасти голосно після спроб — але не пускати
+            # нагору випадковий виняток розбору, який уб'є кейс евала на дрібниці.
+            message = self._recover(
+                system, prompt,
+                first if isinstance(first, ClaudeCodeError) else ClaudeCodeError(str(first)),
+                attempt)
 
         return ChatResult(generations=[ChatGeneration(message=message)])
 

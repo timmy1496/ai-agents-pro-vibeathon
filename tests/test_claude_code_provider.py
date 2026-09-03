@@ -342,3 +342,40 @@ def test_repeated_tool_attempts_eventually_surface(monkeypatch):
 
     with pytest.raises(cc.ToolAttempt):
         bound.invoke([{"role": "user", "content": "?"}])
+
+
+@pytest.mark.parametrize("broken,label", [
+    ("{'reasoning': 'r', 'content': 'x'}", "Python-словник замість JSON"),
+    ('{"reasoning": "r", "content": ', "обірваний об'єкт"),
+    ("зовсім без дужок", "взагалі не об'єкт"),
+])
+def test_every_parse_failure_is_retryable(model, broken, label):
+    """Голий JSONDecodeError летів повз ретрай і вбивав кейс евала на дрібниці.
+
+    Ретрай ловив лише ClaudeCodeError, а розбір збалансованого об'єкта міг кинути
+    JSONDecodeError напряму — саме так помер cap-01 на повному прогоні.
+    """
+    model.script.extend([broken, '{"reasoning": "r", "content": "з другої спроби"}'])
+    bound = model.bind(tools=[tool_spec()])
+
+    assert bound.invoke([{"role": "user", "content": "?"}]).content == "з другої спроби", label
+    assert not model.script
+
+
+def test_an_unexpected_exception_also_gets_a_retry(model, monkeypatch):
+    """Провайдер або віддає придатне повідомлення, або падає голосно — але не пускає
+    нагору випадковий виняток розбору."""
+    calls = {"n": 0}
+    original = cc._first_object
+
+    def flaky(text):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise KeyError("щось несподіване")
+        return original(text)
+
+    monkeypatch.setattr(cc, "_first_object", flaky)
+    model.script.extend(["байдуже", '{"reasoning": "r", "content": "ок"}'])
+    bound = model.bind(tools=[tool_spec()])
+
+    assert bound.invoke([{"role": "user", "content": "?"}]).content == "ок"
