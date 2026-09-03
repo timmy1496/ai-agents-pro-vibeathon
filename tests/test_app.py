@@ -89,6 +89,35 @@ def test_bad_credentials_are_rejected(client, header):
                      json={"thread_id": "t1", "approved": True}).status_code == 401
 
 
+def test_failed_investigation_lands_in_the_thread_not_only_in_stderr(monkeypatch, tmp_path):
+    """Розслідування бігає у фоні, тому виняток нікому повернути.
+
+    Скінчений ключ або недоступний провайдер не мають виглядати як тред, у якому
+    агент просто мовчить: черговий чекає на відповідь, якої вже не буде.
+    """
+    import agents.app as app_module
+    import agents.tools.actions as actions
+
+    slack = tmp_path / "slack.json"
+    monkeypatch.setattr(actions, "SLACK_FILE", slack)
+    monkeypatch.setattr(app_module, "SLACK_FILE", slack)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("немає ключа моделі")
+
+    monkeypatch.setattr(app_module.supervisor, "invoke", boom)
+    http = TestClient(app_module.app)
+    http.post("/webhook/alert", headers=AUTH, json={"alerts": [{
+        "fingerprint": "f1", "labels": {"alertname": "HighErrorRate", "service": "x"},
+        "annotations": {}}]})
+
+    thread = json.loads(slack.read_text())["f1"]
+    assert any("не завершилось" in m["text"] and "немає ключа моделі" in m["text"]
+               for m in thread), "причина провалу мала опинитись у треді"
+    assert any("розбирає людина" in m["text"] for m in thread), \
+        "тред має сказати, що алерт лишається на людині"
+
+
 def test_threads_page_renders_and_escapes(client):
     http, slack = client
     slack.write_text(json.dumps({"t1": [{"author": "sre-agent", "text": "<script>x</script>"}]}))

@@ -43,9 +43,22 @@ if AGENT_TOKEN_IS_DEFAULT:
 
 
 def _handle(text: str, thread_id: str) -> str:
-    state = supervisor.invoke({"messages": [{"role": "user", "content": text}]},
-                              config=trace_config(thread_id, tags=["sre-agent"]))
-    answer = state["messages"][-1].content
+    """Один прохід супервізора з відповіддю в тред.
+
+    Помилка теж іде в тред, і це не косметика: розслідування бігає у фоні
+    (див. вебхук), тому виняток тут нікому повернути — HTTP-відповідь Alertmanager
+    отримав кілька десятків секунд тому. Без цього блоку скінчений ключ або
+    недоступний провайдер виглядають як тред, у якому агент просто мовчить,
+    а справжня причина лишається в stderr процесу.
+    """
+    try:
+        state = supervisor.invoke({"messages": [{"role": "user", "content": text}]},
+                                  config=trace_config(thread_id, tags=["sre-agent"]))
+        answer = str(state["messages"][-1].content)
+    except Exception as error:
+        log.exception("розслідування у треді %s не завершилось", thread_id)
+        answer = (f":warning: Розслідування не завершилось: {type(error).__name__}: {error}\n"
+                  f"Алерт лишається відкритим — розбирає людина.")
     post_slack.invoke({"thread_id": thread_id, "text": answer})
     return answer
 
