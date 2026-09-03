@@ -69,10 +69,8 @@ def test_active_alerts_are_flattened(monkeypatch):
 
 
 def test_alertmanager_down_is_reported_not_raised(monkeypatch):
+    """Підміняємо _safe_get: саме він перетворює збій джерела на читабельну відповідь."""
     import agents.tools.stand as stand
 
-    def boom(url, params):
-        raise OSError("connection refused")
-
-    monkeypatch.setattr(stand, "_get", boom)
+    monkeypatch.setattr(stand, "_safe_get", lambda url, params: None)
     assert "недоступний" in stand.get_active_alerts.invoke({})[0]["error"]

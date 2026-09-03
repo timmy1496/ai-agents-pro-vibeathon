@@ -28,6 +28,17 @@ def _handle(text: str, thread_id: str) -> str:
     return answer
 
 
+def _process_alert(summary: str, thread_id: str) -> None:
+    """Оголошення алерту і розслідування — обидва у фоні.
+
+    Публікація в Slack — синхронний мережевий виклик, і в async-ендпоінті вона
+    блокує event loop. Alertmanager дає на нотифікацію кілька секунд і скасовує
+    її по дедлайну, тож у самому обробнику не має лишитись ніякого вводу-виводу.
+    """
+    post_slack.invoke({"thread_id": thread_id, "text": f":rotating_light: {summary}"})
+    _handle(summary, thread_id)
+
+
 @app.post("/webhook/alert")
 async def alertmanager_webhook(payload: dict, background: BackgroundTasks) -> dict:
     """Вхід від Alertmanager. Відповідаємо одразу — розслідування йде у фоні.
@@ -43,8 +54,7 @@ async def alertmanager_webhook(payload: dict, background: BackgroundTasks) -> di
         thread_id = alert.get("fingerprint") or f"{labels.get('alertname')}-{labels.get('service')}"
         summary = (f"{labels.get('alertname')} {labels.get('severity')} на "
                    f"{labels.get('service')}: {alert.get('annotations', {}).get('summary', '')}")
-        post_slack.invoke({"thread_id": thread_id, "text": f":rotating_light: {summary}"})
-        background.add_task(_handle, summary, thread_id)
+        background.add_task(_process_alert, summary, thread_id)
         threads.append(thread_id)
     return {"accepted": len(alerts), "threads": threads}
 

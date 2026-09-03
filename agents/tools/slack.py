@@ -25,6 +25,23 @@ def enabled() -> bool:
     return bool(SLACK_BOT_TOKEN)
 
 
+def check_token(token: str, prefix: str, name: str) -> str:
+    """Повертає опис проблеми з токеном або порожній рядок.
+
+    Токен їде в HTTP-заголовок, а він latin-1: будь-яка кирилиця валить запит
+    стектрейсом з надр urllib замість зрозумілої помилки. Найчастіша причина —
+    у .env лишився плейсхолдер з інструкції.
+    """
+    if not token:
+        return f"{name} порожній"
+    if not token.isascii():
+        return (f"{name} містить нелатинські символи — схоже, у .env лишився "
+                f"плейсхолдер замість справжнього токена")
+    if not token.startswith(prefix):
+        return f"{name} має починатись з {prefix}, а починається з '{token[:6]}…'"
+    return ""
+
+
 def _load_map() -> dict[str, str]:
     return json.loads(THREAD_MAP.read_text()) if THREAD_MAP.exists() else {}
 

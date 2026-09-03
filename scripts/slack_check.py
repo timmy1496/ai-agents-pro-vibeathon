@@ -9,8 +9,12 @@ from agents.tools import slack
 
 
 def main() -> int:
-    if not slack.enabled():
-        print("SLACK_BOT_TOKEN не заданий у .env — агент писатиме у файл-емуляцію")
+    from agents.config import SLACK_BOT_TOKEN
+
+    problem = slack.check_token(SLACK_BOT_TOKEN, "xoxb-", "SLACK_BOT_TOKEN")
+    if problem:
+        print(problem)
+        print("без робочого токена агент пише у файл-емуляцію")
         return 1
 
     print(f"канал: {SLACK_CHANNEL}")

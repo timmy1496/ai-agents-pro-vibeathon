@@ -53,3 +53,24 @@ def test_threads_page_renders_and_escapes(client):
     slack.write_text(json.dumps({"t1": [{"author": "sre-agent", "text": "<script>x</script>"}]}))
     page = http.get("/").text
     assert "&lt;script&gt;" in page and "<script>x</script>" not in page
+
+
+# Тесту на швидкість відповіді вебхука тут навмисно немає: TestClient дочікується
+# фонових задач, тому виміряв би себе, а не застосунок. Перевіряється це на живому
+# сервері (make agent + curl -w %{time_total}) — див. DEMO.md.
+def test_webhook_schedules_work_instead_of_doing_it(monkeypatch, tmp_path):
+    """В обробнику не має лишитись ні мережі, ні файлів — лише постановка в чергу."""
+    import agents.app as app_module
+    import agents.tools.actions as actions
+
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
+    scheduled = []
+    monkeypatch.setattr(app_module, "_process_alert",
+                        lambda summary, thread_id: scheduled.append(thread_id))
+
+    with TestClient(app_module.app) as http:
+        http.post("/webhook/alert", json={"alerts": [{
+            "fingerprint": "f1", "labels": {"alertname": "A", "service": "s"},
+            "annotations": {}}]})
+
+    assert scheduled == ["f1"], "уся робота має йти через _process_alert у фоні"

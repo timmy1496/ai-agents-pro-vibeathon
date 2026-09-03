@@ -96,3 +96,17 @@ def test_without_token_everything_goes_to_file(monkeypatch, tmp_path):
 
     result = actions.post_slack.invoke({"thread_id": "t1", "text": "привіт"})
     assert result["transport"] == "file" and result["messages_in_thread"] == 1
+
+
+@pytest.mark.parametrize("token, expected", [
+    ("", "порожній"),
+    ("xoxb-твій-токен", "нелатинські"),
+    ("xapp-123456789", "має починатись з xoxb-"),
+    ("xoxb-1234-5678-abcdef", ""),
+])
+def test_token_problems_are_named_before_the_request(token, expected):
+    """Кирилиця в токені валить urllib стектрейсом про latin-1 — це не діагноз."""
+    from agents.tools import slack
+
+    problem = slack.check_token(token, "xoxb-", "SLACK_BOT_TOKEN")
+    assert expected in problem if expected else problem == ""

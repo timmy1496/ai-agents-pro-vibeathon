@@ -60,8 +60,12 @@ def run() -> int:
     from slack_sdk.socket_mode.request import SocketModeRequest
     from slack_sdk.socket_mode.response import SocketModeResponse
 
-    if not (SLACK_BOT_TOKEN and SLACK_APP_TOKEN):
-        print("Потрібні SLACK_BOT_TOKEN (xoxb-) і SLACK_APP_TOKEN (xapp-) у .env")
+    problems = [p for p in (slack.check_token(SLACK_BOT_TOKEN, "xoxb-", "SLACK_BOT_TOKEN"),
+                            slack.check_token(SLACK_APP_TOKEN, "xapp-", "SLACK_APP_TOKEN")) if p]
+    if problems:
+        for problem in problems:
+            print(f"  {problem}")
+        print("\nApp-level токен: Socket Mode -> Generate Token (скоуп connections:write)")
         return 2
 
     web = WebClient(token=SLACK_BOT_TOKEN)
