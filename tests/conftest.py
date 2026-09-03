@@ -11,7 +11,27 @@ Context-Minimization, стелю кроків, HITL.
 Перемикання і переіндексація свідомо розділені: перше коштує нуль і потрібне всім,
 друге тягне ONNX-модель і потрібне лише тестам, що справді шукають по KB.
 """
+import pathlib
+
 import pytest
+
+# Підлога на кількість зібраних тестів. Єдине, чого pytest не покриває сам: файл, який
+# випав зі збору (перейменування, помилка імпорту в conftest, зламаний маркер), тихо
+# перестає перевірятись — а сьют лишається зеленим і навіть швидшає. Число піднімають
+# разом з новими тестами; воно завжди трохи нижче за фактичне, щоб не червоніти на
+# кожному видаленому параметрі.
+MIN_COLLECTED = 205
+
+
+def pytest_collection_modifyitems(session, config, items):
+    """Гард працює лише на повному прогоні: `pytest tests/test_kb.py` збирає менше і це нормально."""
+    targets = [a for a in config.args if not a.startswith("-")]
+    full_run = not targets or all(pathlib.Path(t).name in ("tests", "") for t in targets)
+    if full_run and len(items) < MIN_COLLECTED:
+        raise pytest.UsageError(
+            f"зібрано лише {len(items)} тестів при підлозі {MIN_COLLECTED} — "
+            f"схоже, файл випав зі збору. Якщо тести свідомо видалені, опусти "
+            f"MIN_COLLECTED у tests/conftest.py тим самим комітом.")
 
 
 @pytest.fixture(scope="session", autouse=True)

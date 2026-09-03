@@ -47,12 +47,21 @@ kb-index:      ## Переіндексувати KB у Qdrant стенду
 test:          ## Офлайн-тести (Qdrant у режимі :memory:, без docker)
 	.venv/bin/python -m pytest tests -q
 
-.PHONY: eval eval-online
+.PHONY: eval eval-contract eval-online eval-report eval-rubric-bump
 eval:          ## Детермінований гейт евалів (без ключа, без стенду)
-	.venv/bin/python -m pytest tests/test_eval_gate.py -q
+	.venv/bin/python -m pytest tests/test_eval_gate.py tests/test_eval_contract.py -q
 
-eval-online:   ## Прогін датасету справжнім агентом + LLM-judge (потрібен ANTHROPIC_API_KEY)
-	.venv/bin/python -m evals.run
+eval-contract: ## Контракт вимірювального інструмента: версія рубрики, промпти, форма датасету
+	.venv/bin/python -m pytest tests/test_eval_contract.py -q
+
+eval-online:   ## Прогін датасету агентом + суддя за рубрикою (потрібен ANTHROPIC_API_KEY)
+	.venv/bin/python -m evals.run --html
+
+eval-report:   ## Перезібрати docs/eval-report.html з останнього JSON-звіту
+	.venv/bin/python -m evals.report
+
+eval-rubric-bump:  ## Бампнути версію рубрики після правки evals/prompts/*.md
+	.venv/bin/python -m scripts.bump_rubric
 
 .PHONY: agent
 agent:         ## Запустити агента (вебхук Alertmanager + перегляд тредів на :8000)

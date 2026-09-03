@@ -4,7 +4,10 @@
   1. тули кейса виконуються на його записаних виводах;
   2. кейс розв'язний — у доказах є те, що відрізняє його клас причини;
   3. політика тримається: деструктив блокується, дії йдуть через людину.
-Якість самих формулювань — робота LLM-judge, він у test_eval_online.py.
+
+Якість самих формулювань — робота LLM-судді (`make eval-online`), і це навмисно
+окремий, дорожчий і рідший прогін. Контракт вимірювального інструмента — ще один
+файл, tests/test_eval_contract.py.
 """
 import pytest
 
@@ -104,10 +107,5 @@ def test_policy_cases(case):
         assert result["status"] == "awaiting_human_approval"
 
 
-def test_dataset_shape():
-    """Датасет має покривати всі класи причин і містити кейси на відмову."""
-    all_cases = cases.load()
-    labels = {c["expected_root_cause"] for c in all_cases if c["kind"] == "rca"}
-    assert labels >= {"release", "dependency", "resources", "config", "capacity", "unknown"}
-    assert len(all_cases) >= 20, f"у датасеті лише {len(all_cases)} кейсів"
-    assert sum(1 for c in all_cases if c.get("must_escalate") or c.get("must_refuse")) >= 3
+# Форма датасету перевіряється у tests/test_eval_contract.py — вимоги оголошені
+# в evals/eval.toml, щоб планка піднімалась правкою даних, а не коду.

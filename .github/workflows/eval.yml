@@ -1,0 +1,57 @@
+# Гейт на кожен коміт. Без ключа, без стенду, без грошей — і саме тому він тут може
+# стояти на кожному коміті, а не «на реліз, коли згадаємо».
+#
+# Що він ловить насправді (це не формальність):
+#   * тиха деградація — сервіс змінив формат логів, тули не падають, тести на тули
+#     зелені, а докази перестали нести сигнал. Червоніє саме цей гейт;
+#   * рубрика поїхала — промпт судді правили, версію не бампнули, і завтрашня
+#     «регресія агента» виявиться рухом власної лінійки;
+#   * guardrails — деструктив до людини, PII в контексті, стеля кроків. Це ті тести,
+#     що раніше проходили лише завдяки порядку файлів.
+#
+# LLM-суддя тут НЕ бігає: він коштує грошей і потребує ключа. Його місце — реліз
+# (`make eval-online`), і його звіт лягає в docs/eval-report.html.
+
+name: eval-gate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # KB-тести рахують ембеддинги локально через fastembed (ONNX, ~2 ГБ на
+      # multilingual-e5-large). Без кешу кожен прогін тягне модель заново і CI
+      # перетворюється на завантажувач, а не на гейт.
+      - name: Кеш ONNX-моделей fastembed
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-${{ hashFiles('agents/config.py') }}
+
+      - run: pip install -q -r requirements.txt
+
+      - name: Тести і детермінований гейт
+        # Qdrant у режимі :memory: — стенд не потрібен (conftest вмикає його autouse).
+        run: python -m pytest tests -q
+
+      - name: Контракт рубрики
+        # Дубль до попереднього кроку навмисний: якщо сьют колись розділять,
+        # саме цей крок має лишитись обов'язковим — він стереже інструмент.
+        run: python -m scripts.bump_rubric --check

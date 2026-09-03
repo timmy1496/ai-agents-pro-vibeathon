@@ -1,11 +1,15 @@
-"""Онлайн-прогін датасету справжнім агентом. Потребує ANTHROPIC_API_KEY.
+"""Онлайн-прогін датасету справжнім агентом. Потребує ANTHROPIC_API_KEY або OPENROUTER_API_KEY.
 
-    python -m evals.run                 # усі rca-кейси + judge
+    python -m evals.run                 # усі rca-кейси + суддя
     python -m evals.run --no-judge      # тільки траєкторія і клас причини (дешевше)
     python -m evals.run --case rel-01
+    python -m evals.run --html          # ще й docs/eval-report.html
 
 Пише звіт у evals/reports/ і друкує дельту до попереднього прогону — щоб тиха
 деградація (змінили формат логів, підкрутили промпт) була видима, а не здогадувана.
+
+Коди виходу: 0 — гейт зелений; 1 — пробито поріг; 2 — прогнати неможливо (немає ключа,
+поїхала рубрика). Невідоме ніколи не проходить за зелене.
 """
 from __future__ import annotations
 
@@ -18,13 +22,14 @@ import sys
 import pytest
 
 from evals import cases as dataset
+from evals import config, judge as judging
 from evals.backend import use_fixtures
 
 REPORTS = pathlib.Path(__file__).parent / "reports"
+DOCS = pathlib.Path(__file__).resolve().parent.parent / "docs"
 
 
 def run_case(case: dict, with_judge: bool, tmp: pathlib.Path) -> dict:
-    from evals.judge import judge
     from evals.runner import run_online
 
     monkeypatch = pytest.MonkeyPatch()
@@ -42,32 +47,74 @@ def run_case(case: dict, with_judge: bool, tmp: pathlib.Path) -> dict:
     row["root_cause"] = result["report"].root_cause_label
     row["confidence"] = result["report"].confidence
     row["evidence_count"] = len(result["report"].evidence)
+    row["hypothesis"] = result["report"].hypothesis
+    row["recommended_actions"] = result["report"].recommended_actions
     if with_judge:
-        verdict = judge(case, result["report"], result["tool_log"])
-        row["judge"] = verdict.model_dump()
+        row["judge"] = judging.judge(case, result["report"], result["tool_log"])
     return row
 
 
 def summarise(rows: list[dict]) -> dict:
+    """Детерміновані метрики + середні по вимірах судді (n/a у знаменник не входять)."""
     total = len(rows)
-    scored = [r["judge"] for r in rows if "judge" in r]
-    return {
+    summary = {
         "cases": total,
         "root_cause_accuracy": round(sum(r["root_cause_match"] for r in rows) / total, 3),
         "tool_recall": round(sum(not r["missing_tools"] for r in rows) / total, 3),
         "grounded_rate": round(sum(r["grounded"] for r in rows) / total, 3),
         "self_completed": round(sum(not r.get("fallback_synthesis") for r in rows) / total, 3),
         "avg_revisions": round(sum(r["revisions"] for r in rows) / total, 2),
-        **({"avg_correctness": round(sum(j["correctness"] for j in scored) / len(scored), 2),
-            "avg_groundedness": round(sum(j["groundedness"] for j in scored) / len(scored), 2),
-            "avg_actionability": round(sum(j["actionability"] for j in scored) / len(scored), 2)}
-           if scored else {}),
     }
+    for dimension in config.dimensions():
+        value = judging.average(rows, dimension)
+        if value is not None:
+            summary[dimension] = value
+    return summary
 
 
-def previous_summary() -> dict | None:
-    reports = sorted(REPORTS.glob("*.json"))
-    return json.loads(reports[-1].read_text())["summary"] if reports else None
+def check_gate(summary: dict, previous: dict | None) -> list[str]:
+    """Абсолютні пороги + падіння проти попереднього прогону. Пороги — з eval.toml.
+
+    Порівняння з попереднім прогоном свідомо окреме від абсолютних порогів: метрика
+    може стояти вище порогу і при цьому впасти на 0.2 за коміт — це теж регресія,
+    просто ще не аварія.
+    """
+    thresholds = config.gate()
+    failures = [
+        f"{metric} = {summary[metric]:.3f} нижче порогу {thresholds[key]:.2f}"
+        for key, metric in (("min_root_cause_accuracy", "root_cause_accuracy"),
+                            ("min_tool_recall", "tool_recall"),
+                            ("min_grounded_rate", "grounded_rate"),
+                            ("min_self_completed", "self_completed"),
+                            ("min_correctness", "correctness"),
+                            ("min_groundedness", "groundedness"),
+                            ("min_actionability", "actionability"))
+        if metric in summary and summary[metric] < thresholds[key]
+    ]
+    if previous:
+        failures += [
+            f"{metric} впав на {previous[metric] - summary[metric]:.3f} "
+            f"(було {previous[metric]:.3f}, стало {summary[metric]:.3f})"
+            for metric in summary
+            if isinstance(summary.get(metric), float) and metric in previous
+            and previous[metric] - summary[metric] > thresholds["max_drop"]
+        ]
+    return failures
+
+
+def previous_report() -> dict | None:
+    """Попередній прогін ТІЄЇ САМОЇ рубрики і того самого судді.
+
+    Дельта між різними рубриками або суддями не є дельтою якості агента: зсунувся сам
+    інструмент. Такі прогони просто пропускаються, а не приводяться до спільного вигляду.
+    """
+    for path in sorted(REPORTS.glob("*.json"), reverse=True):
+        report = json.loads(path.read_text(encoding="utf-8"))
+        meta = report.get("meta", {})
+        if (meta.get("rubric_version") == config.rubric_version()
+                and meta.get("judge_model") == config.judge_model()):
+            return report
+    return None
 
 
 def print_delta(current: dict, previous: dict | None) -> None:
@@ -84,8 +131,15 @@ def print_delta(current: dict, previous: dict | None) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", help="прогнати один кейс за id")
-    parser.add_argument("--no-judge", action="store_true", help="без LLM-judge")
+    parser.add_argument("--no-judge", action="store_true", help="без LLM-судді")
+    parser.add_argument("--html", action="store_true", help="ще й docs/eval-report.html")
     args = parser.parse_args(argv)
+
+    try:  # fail-closed ДО витрати токенів: зіпсована рубрика не має що вимірювати
+        config.check_rubric_integrity()
+    except config.RubricDrift as drift:
+        print(f"рубрика поїхала:\n{drift}", file=sys.stderr)
+        return 2
 
     selected = [c for c in dataset.by_kind("rca")
                 if args.case is None or c["id"] == args.case]
@@ -95,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import os
 
-    from agents.config import OPENROUTER_KEY  # імпорт тягне load_dotenv
+    from agents.config import OPENROUTER_KEY, STRONG_MODEL  # імпорт тягне load_dotenv
 
     if not (OPENROUTER_KEY or os.getenv("ANTHROPIC_API_KEY")):
         print("Потрібен ANTHROPIC_API_KEY або OPENROUTER_API_KEY у .env.\n"
@@ -113,13 +167,42 @@ def main(argv: list[str] | None = None) -> int:
               f"пропущені тули={row['missing_tools'] or '-'}")
 
     summary = summarise(rows)
-    previous = previous_summary()
+    previous = previous_report()
+    failures = check_gate(summary, (previous or {}).get("summary"))
+    report = {
+        "meta": {
+            "stamp": dt.datetime.now().isoformat(timespec="seconds"),
+            "rubric_version": config.rubric_version(),
+            "prompts_sha": config.prompts_digest(),
+            "judge_model": config.judge_model() if not args.no_judge else None,
+            "agent_model": STRONG_MODEL,
+            "cases": len(rows),
+        },
+        "summary": summary,
+        "gate": {"passed": not failures, "failures": failures},
+        "rows": rows,
+    }
+
     REPORTS.mkdir(exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     (REPORTS / f"{stamp}.json").write_text(
-        json.dumps({"summary": summary, "rows": rows}, indent=2, ensure_ascii=False))
-    print_delta(summary, previous)
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    print_delta(summary, (previous or {}).get("summary"))
     print(f"\nзвіт: evals/reports/{stamp}.json")
+
+    if args.html:
+        from evals.report import write_html
+
+        path = write_html(report, previous, DOCS / "eval-report.html")
+        print(f"html:  {path.relative_to(DOCS.parent)}")
+
+    if failures:
+        print("\n=== ГЕЙТ ЧЕРВОНИЙ ===", file=sys.stderr)
+        for failure in failures:
+            print(f"  • {failure}", file=sys.stderr)
+        return 1
+    print("\nгейт зелений")
     return 0
 
 
