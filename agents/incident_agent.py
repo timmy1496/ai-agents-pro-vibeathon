@@ -152,14 +152,31 @@ def _thread_id(config: dict | None) -> str | None:
     return (config or {}).get("configurable", {}).get("thread_id")
 
 
+def pending_approval(config: dict | None = None) -> bool:
+    """Чи справді щось чекає рішення людини у цьому треді.
+
+    Перевіряти обов'язково, і ось чому: `Command(resume=...)` на треді, де нічого не
+    висить, LangGraph виконує як звичайний запуск графа — тобто «ок» під старим
+    повідомленням тихо запустив би НОВЕ розслідування, витратив би модель і дописав би
+    у тред відповідь, якої ніхто не просив. Кнопка підтвердження не має права нічого
+    запускати.
+    """
+    if not _thread_id(config):
+        return False
+    snapshot = shared_agent().get_state(config)
+    return bool(snapshot.next) and any(task.interrupts for task in snapshot.tasks)
+
+
 def resume(decision: Literal["approve", "reject"], note: str = "",
-           config: dict | None = None) -> dict:
-    """Продовжує граф, що стоїть на HITL, рішенням людини.
+           config: dict | None = None) -> dict | None:
+    """Продовжує граф, що стоїть на HITL, рішенням людини. None — якщо не було чого.
 
     Рішення людини — це саме рішення, а не дозвіл агенту діяти: на approve тул
     propose_action виконується і повертає «awaiting_human_approval» у тред. Жодних
     змін в інфраструктурі агент не робить ні до, ні після підтвердження.
     """
+    if not pending_approval(config):
+        return None
     return shared_agent().invoke(
         Command(resume={"decisions": [{"type": decision, "message": note}]}),
         config=config or {})

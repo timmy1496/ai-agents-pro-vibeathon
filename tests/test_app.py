@@ -53,13 +53,45 @@ def test_approval_is_recorded_in_thread(client):
     assert any("підтверджено" in m["text"] and "відкочуємо" in m["text"] for m in thread)
 
 
-def test_approve_without_a_pending_interrupt_is_not_an_error(client):
-    """Людина може натиснути «ок» у треді, де нічого не висить — це не 500."""
+def test_approve_without_a_pending_interrupt_starts_nothing(client, monkeypatch):
+    """«Ок» під старим повідомленням не має права запустити нове розслідування.
+
+    Це не гіпотетично: `Command(resume=...)` на треді, де нічого не висить, LangGraph
+    виконує як звичайний запуск графа. Поки моделі не було, воно падало і виглядало
+    безпечним; щойно модель зʼявилась — тихо витрачало б її і дописувало у тред
+    відповідь, якої ніхто не просив.
+    """
+    import agents.incident_agent as incident
+
+    called = []
+    monkeypatch.setattr(incident, "shared_agent",
+                        lambda *a, **k: called.append(1) or (_ for _ in ()).throw(
+                            AssertionError("граф не мали чіпати")))
+
     http, _ = client
     response = http.post("/approve", headers=AUTH,
                          json={"thread_id": "порожній-тред", "approved": True})
     assert response.status_code == 200
     assert response.json()["resumed"] is False
+
+
+def test_approve_resumes_a_thread_that_really_waits(client, monkeypatch):
+    """Зворотний бік: коли interrupt справді висить, рішення доходить до графа."""
+    import agents.app as app_module
+    import agents.incident_agent as incident
+
+    monkeypatch.setattr(incident, "pending_approval", lambda config=None: True)
+    monkeypatch.setattr(
+        incident, "shared_agent",
+        lambda *a, **k: type("G", (), {
+            "invoke": staticmethod(lambda *args, **kwargs: {
+                "messages": [type("M", (), {"content": "дію зафіксовано"})()]})})())
+
+    http, slack = client
+    body = http.post("/approve", headers=AUTH,
+                     json={"thread_id": "t9", "approved": True}).json()
+    assert body["resumed"] is True
+    assert "дію зафіксовано" in json.loads(slack.read_text())["t9"][-1]["text"]
 
 
 # --- авторизація -------------------------------------------------------------

@@ -123,8 +123,14 @@ async def approve(approval: Approval) -> dict:
     try:
         state = resume(decision, approval.note,
                        config=trace_config(approval.thread_id, tags=["hitl"]))
-    except Exception as error:  # тред без активного interrupt — нормальна ситуація
-        log.info("нічого продовжувати у треді %s: %s", approval.thread_id, error)
+    except Exception as error:
+        log.exception("продовження треда %s не вдалось", approval.thread_id)
+        post_slack.invoke({"thread_id": approval.thread_id,
+                           "text": f":warning: Рішення записано, але агент не зміг "
+                                   f"продовжити: {type(error).__name__}: {error}"})
+        return {"thread_id": approval.thread_id, "decision": verdict, "resumed": False}
+
+    if state is None:  # у треді нічого не висіло — рішення просто зафіксовано
         return {"thread_id": approval.thread_id, "decision": verdict, "resumed": False}
 
     answer = state["messages"][-1].content

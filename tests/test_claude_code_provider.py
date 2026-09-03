@@ -55,9 +55,16 @@ def model(monkeypatch):
     return Scripted(built, script)
 
 
-def tool_spec(name: str = "get_deploys") -> dict:
-    return {"type": "function", "function": {"name": name, "description": "деплої",
-                                             "parameters": {"type": "object", "properties": {}}}}
+def tool_spec(name: str = "get_deploys", properties: tuple = ("service", "hours"),
+              required: tuple = ("service",)) -> dict:
+    return {"type": "function", "function": {
+        "name": name, "description": "опис",
+        "parameters": {"type": "object",
+                       "properties": {p: {"type": "string"} for p in properties},
+                       "required": list(required)}}}
+
+
+VERDICT = tool_spec("Verdict", properties=("ok",), required=("ok",))
 
 
 # --- розбір відповіді ---------------------------------------------------------
@@ -104,21 +111,42 @@ def test_prose_around_the_object_does_not_break_the_parse(model):
 ])
 def test_single_forced_tool_accepts_every_shape_the_model_uses(model, answer, label):
     model.script.append(json.dumps(answer, ensure_ascii=False))
-    bound = model.bind(tools=[tool_spec("Verdict")], force_tool_call=True)
+    bound = model.bind(tools=[VERDICT], force_tool_call=True)
 
     calls = bound.invoke([{"role": "user", "content": "?"}]).tool_calls
     assert [c["name"] for c in calls] == ["Verdict"], label
     assert calls[0]["args"] == {"ok": True}, label
 
 
-def test_forced_tool_call_with_several_tools_is_not_salvaged(model):
-    """Рятувати можна лише коли інструмент один: інакше форма відповіді неоднозначна."""
-    model.script.append(json.dumps({"reasoning": "r", "content": {"ok": True}}))
-    model.script.append(json.dumps({"reasoning": "r", "content": {"ok": True}}))
-    bound = model.bind(tools=[tool_spec("A"), tool_spec("B")], force_tool_call=True)
+def test_the_right_tool_is_picked_among_many_by_its_schema(model):
+    """Головний виробничий випадок, і він не крайній.
 
-    with pytest.raises(cc.ClaudeCodeError, match="обов'язковий tool_call"):
-        bound.invoke([{"role": "user", "content": "?"}])
+    У фінальному кроці create_agent зі структурованим виводом LangChain біндить УСІ
+    інструменти агента плюс інструмент-схему відповіді і ставить tool_choice="any".
+    Тобто forced-виклик з одинадцятьма інструментами — норма, і припущення «інструмент
+    один» тут просто не виконується.
+    """
+    model.script.append(json.dumps({"reasoning": "r", "content": {"ok": True}}))
+    bound = model.bind(force_tool_call=True, tools=[
+        tool_spec("get_deploys"), tool_spec("k8s_events"), VERDICT])
+
+    calls = bound.invoke([{"role": "user", "content": "?"}]).tool_calls
+    assert [c["name"] for c in calls] == ["Verdict"]
+
+
+def test_ambiguous_fields_are_not_guessed(model):
+    """Два інструменти з однаковою схемою — форма відповіді неоднозначна.
+
+    Тут вгадувати не можна: обраний навмання інструмент виконає не ту дію. Замість
+    цього виклик іде на переклад окремим кроком.
+    """
+    fields = json.dumps({"reasoning": "r", "content": {"service": "x"}})
+    model.script.extend([fields, '{"name": "A", "args": {"service": "x"}}'])
+    bound = model.bind(force_tool_call=True, tools=[tool_spec("A"), tool_spec("B")])
+
+    calls = bound.invoke([{"role": "user", "content": "?"}]).tool_calls
+    assert calls[0]["name"] == "A", "неоднозначність вирішує окремий крок перекладу"
+    assert not model.script
 
 
 # --- режими -------------------------------------------------------------------
@@ -156,6 +184,33 @@ def test_with_tools_the_protocol_and_contract_are_present(model):
 
 
 # --- ретрай і облік -----------------------------------------------------------
+
+def test_prose_is_translated_into_a_tool_call_not_just_re_asked(model):
+    """Найдорожчий збій: модель написала змістовний звіт, але прозою.
+
+    Просто перепитати «ще раз, але за формою» слабо працює — модель знову захоплюється
+    відповіддю; на живому прогоні це двічі поспіль вбило кейс. Тому другий крок вузький:
+    перекласти вже написаний текст у виклик, а не переробити роботу.
+    """
+    model.script.append(json.dumps({"reasoning": "r", "content": "## Звіт\n\nПричина — реліз."}))
+    model.script.append('{"name": "Verdict", "args": {"ok": true}}')
+    bound = model.bind(force_tool_call=True, tools=[VERDICT])
+
+    calls = bound.invoke([{"role": "user", "content": "?"}]).tool_calls
+    assert calls == [{"name": "Verdict", "args": {"ok": True},
+                      "id": "cc_reformat", "type": "tool_call"}]
+    assert not model.script
+
+
+def test_translation_into_an_unknown_tool_is_refused(model):
+    """Переклад не має права вигадати інструмент, якого не біндили."""
+    model.script.append(json.dumps({"reasoning": "r", "content": "проза"}))
+    model.script.append('{"name": "НеІснує", "args": {}}')
+    bound = model.bind(force_tool_call=True, tools=[VERDICT])
+
+    with pytest.raises(cc.ClaudeCodeError, match="переклад у виклик не вдався"):
+        bound.invoke([{"role": "user", "content": "?"}])
+
 
 def test_broken_protocol_gets_exactly_one_reminder_retry(model):
     model.script.append("зовсім не JSON")

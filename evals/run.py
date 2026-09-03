@@ -124,17 +124,26 @@ def check_gate(summary: dict, previous: dict | None) -> list[str]:
 def comparable(meta: dict) -> bool:
     """Чи можна порівнювати цей прогін з поточним.
 
-    Три речі мають збігтись, і всі три — частини вимірювального інструмента, а не
-    налаштування: версія рубрики, модель судді і ПРОВАЙДЕР. Останній тут не для
-    повноти: через Claude Code CLI tool calling промптовий, а не нативний, тобто
-    агент виконує іншу механіку виклику інструментів. Дельта між прогонами на різних
-    провайдерах виміряла б різницю транспортів, а не якість агента.
+    Чотири речі мають збігтись, і всі чотири — частини вимірювального інструмента, а не
+    налаштування: версія рубрики, модель судді, ПРОВАЙДЕР і НАБІР КЕЙСІВ.
+
+    Провайдер тут не для повноти: через Claude Code CLI tool calling промптовий, а не
+    нативний, тобто агент виконує іншу механіку виклику інструментів. Дельта між
+    провайдерами виміряла б різницю транспортів, а не якість агента.
+
+    Набір кейсів — з тієї ж причини. `--case rel-01` і `--case rel-02` дають по одному
+    числу кожен, і різниця між ними це різниця кейсів, а не зміна агента. Раніше вони
+    порівнювались між собою і друкували дельту, яка нічого не означала.
     """
     from agents.models import provider
 
     return (meta.get("rubric_version") == config.rubric_version()
             and meta.get("judge_model") == config.judge_model()
-            and meta.get("provider") == provider())
+            and meta.get("provider") == provider()
+            and meta.get("case_ids") == _case_ids)
+
+
+_case_ids: list[str] = []
 
 
 def previous_report() -> dict | None:
@@ -193,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
 
     tmp = REPORTS / "_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
+    _case_ids[:] = [c["id"] for c in selected]
     rows = []
     print(f"кейсів: {len(selected)}\n", flush=True)
     for case in selected:
@@ -215,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             "agent_model": STRONG_MODEL,
             "provider": transport,
             "cases": len(rows),
+            "case_ids": _case_ids,
             "spend": spend(),
         },
         "summary": summary,

@@ -297,20 +297,25 @@ class ClaudeCodeChatModel(BaseChatModel):
         Коли рятувати нема чого (немає тексту або інструментів кілька), лишається
         звичайне нагадування про формат.
         """
-        if failure.raw and self.force_tool_call and len(self.tools) == 1:
-            function = self.tools[0]["function"]
-            schema = json.dumps(function.get("parameters", {}), ensure_ascii=False)
+        if failure.raw and self.force_tool_call and self.tools:
+            names = {spec["function"]["name"] for spec in self.tools}
             reformat = self.model_copy(update={"tools": [], "force_tool_call": False})
             reformat.spend = self.spend
             payload = reformat._run_cli(
-                "Ти перекладаєш готову відповідь у структуру. Нічого не вигадуй, нічого "
-                "не втрачай, нічого не оцінюй: усе, що потрібно, вже є в тексті нижче.\n"
-                "Поверни РІВНО один JSON-об'єкт за схемою і нічого крім нього.",
-                f"СХЕМА:\n{schema}\n\nТЕКСТ, ЯКИЙ ТРЕБА ПЕРЕКЛАСТИ У ЦЮ СХЕМУ:\n{failure.raw}")
-            fields = _first_object(str(payload.get("result", "")))
+                "Ти перекладаєш готову відповідь у виклик інструмента. Нічого не вигадуй, "
+                "нічого не втрачай, нічого не оцінюй наново: усе потрібне вже є в тексті.\n"
+                'Поверни РІВНО один JSON-об\'єкт {"name": "<інструмент>", "args": {…}} '
+                "і нічого крім нього.",
+                f"{_tool_contract(self.tools)}\n\nТЕКСТ, ЯКИЙ ТРЕБА ПЕРЕКЛАСТИ "
+                f"У ВИКЛИК:\n{failure.raw}")
+            call = _first_object(str(payload.get("result", "")))
+            name, args = call.get("name"), call.get("args")
+            if name not in names or not isinstance(args, dict):
+                raise ClaudeCodeError(
+                    f"переклад у виклик не вдався: {str(call)[:300]!r}") from failure
             return AIMessage(
                 content="",
-                tool_calls=[{"name": function["name"], "args": fields,
+                tool_calls=[{"name": name, "args": args,
                              "id": "cc_reformat", "type": "tool_call"}],
                 response_metadata=_usage(payload.get("usage", {})),
             )
@@ -341,29 +346,50 @@ class ClaudeCodeChatModel(BaseChatModel):
                 f"{content[:300]!r}", raw=content)
         return AIMessage(content=str(decision.get("content", "")), response_metadata=metadata)
 
+    def _matching_tool(self, fields: dict) -> str | None:
+        """Якому інструменту належать ці поля.
+
+        Покластись на «інструмент один» не можна, і це не теорія: у фінальному кроці
+        create_agent зі структурованим виводом LangChain біндить УСІ інструменти агента
+        плюс інструмент-схему відповіді, і ставить tool_choice="any". Тобто forced-виклик
+        з одинадцятьма інструментами — не крайній випадок, а звичайний.
+
+        Тому вибір за схемою: усі обов'язкові поля інструмента присутні, зайвих немає.
+        Якщо підходить рівно один — форма відповіді однозначна.
+        """
+        keys = set(fields)
+        matches = [
+            spec["function"]["name"]
+            for spec in self.tools
+            if (params := spec["function"].get("parameters", {}))
+            and (required := set(params.get("required", [])))
+            and required <= keys <= set(params.get("properties", {}))
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     def _salvage_forced_call(self, decision: dict) -> list[dict]:
         """Структурований вивід, поданий без обгортки протоколу.
 
-        `with_structured_output` — це той самий tool calling з рівно одним інструментом,
-        і модель регулярно віддає його «навпростець»: або кладе поля схеми прямо в
-        content, або взагалі повертає саму схему замість {reasoning, tool_calls}.
-        Змісту це не змінює, і карати за це кейс евала немає сенсу — коли інструмент
-        один, форма відповіді однозначна.
+        `with_structured_output` — це tool calling, і модель регулярно віддає його
+        «навпростець»: кладе поля схеми в content об'єктом, кладе їх туди рядком, або
+        взагалі повертає саму схему замість {reasoning, tool_calls}. Змісту це не
+        змінює, і карати за це кейс евала немає сенсу.
         """
-        if not (self.force_tool_call and len(self.tools) == 1):
+        if not self.force_tool_call:
             return []
-        name = self.tools[0]["function"]["name"]
         content = decision.get("content")
         if isinstance(content, str):
-            try:  # найчастіший випадок: схема серіалізована в рядок усередині content
+            try:  # схема, серіалізована в рядок усередині content
                 content = json.loads(_strip_fence(content).strip())
             except json.JSONDecodeError:
                 content = None
-        if isinstance(content, dict):
-            return [{"name": name, "args": content}]
         envelope = {"reasoning", "content", "tool_calls"}
-        fields = {k: v for k, v in decision.items() if k not in envelope}
-        return [{"name": name, "args": fields}] if fields else []
+        fields = content if isinstance(content, dict) else \
+            {k: v for k, v in decision.items() if k not in envelope}
+        if not fields:
+            return []
+        name = self._matching_tool(fields)
+        return [{"name": name, "args": fields}] if name else []
 
     def _stream(self, *args: Any, **kwargs: Any) -> Iterator:
         raise NotImplementedError("headless-виклик не стрімиться, і евалам це не потрібно")
