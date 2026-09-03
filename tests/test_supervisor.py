@@ -140,3 +140,13 @@ def test_report_marker_matches_what_render_report_produces():
                             recommended_actions=["a"]),
         "revisions": 0, "verdict": Verdict(grounded=True, verdict="ACCEPT")})
     assert REPORT_MARKER in rendered
+
+
+def test_joke_request_reaches_the_joke_node(routed, monkeypatch):
+    from agents import jokes
+
+    monkeypatch.setattr(jokes, "JOKES_ENABLED", True)  # у тестах гумор вимкнено за замовчуванням
+    app = routed.make("JOKE")
+    state = app.invoke({"messages": [{"role": "user", "content": "пожартуй"}]},
+                       config={"configurable": {"thread_id": "t-joke"}})
+    assert ":coffee:" in state["messages"][-1].content

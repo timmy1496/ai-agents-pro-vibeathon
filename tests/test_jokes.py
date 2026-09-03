@@ -62,7 +62,8 @@ def test_no_joke_mentions_users_or_customers():
         assert not any(word in joke.lower() for word in forbidden), joke
 
 
-def test_alert_flow_posts_the_joke_between_alert_and_report(monkeypatch, tmp_path):
+def test_incident_flow_does_not_joke_on_its_own(monkeypatch, tmp_path):
+    """Під час падіння бот не підкидає гумор сам — тільки на прямий запит."""
     import json
 
     import agents.app as app_module
@@ -73,10 +74,45 @@ def test_alert_flow_posts_the_joke_between_alert_and_report(monkeypatch, tmp_pat
                         lambda text, thread_id: actions.post_slack.invoke(
                             {"thread_id": thread_id, "text": "звіт RCA"}))
 
-    app_module._process_alert("HighErrorRate critical", "t1", "HighErrorRate")
+    app_module._process_alert("HighErrorRate critical", "t1")
 
     thread = json.loads((tmp_path / "slack.json").read_text())["t1"]
-    assert len(thread) == 3, "алерт, жарт, звіт"
-    assert thread[0]["text"].startswith(":rotating_light:")
-    assert thread[1]["text"].startswith(":coffee:")
-    assert thread[2]["text"] == "звіт RCA"
+    assert len(thread) == 2, "має бути лише алерт і звіт"
+    assert not any(":coffee:" in m["text"] for m in thread)
+
+
+def test_joke_node_answers_on_request():
+    from langchain_core.messages import HumanMessage
+
+    from agents.supervisor import joke_node
+
+    state = {"messages": [HumanMessage(content="пожартуй")], "service": "", "intent": "JOKE"}
+    answer = joke_node(state)["messages"][0]["content"]
+    assert answer.startswith(":coffee:")
+
+
+def test_joke_in_an_incident_thread_matches_that_alert():
+    """Якщо просять у треді інциденту — жарт до того типу алерту, що там розбирався."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from agents import jokes
+    from agents.supervisor import joke_node
+
+    state = {"messages": [
+        HumanMessage(content="HighMemoryUsage warning на demo-chaos-svc"),
+        AIMessage(content="Клас причини: `resources`"),
+        HumanMessage(content="пожартуй")], "service": "demo-chaos-svc", "intent": "JOKE"}
+
+    answer = joke_node(state)["messages"][0]["content"]
+    assert any(answer.endswith(option) for option in jokes.BY_ALERT["HighMemoryUsage"])
+
+
+def test_joke_node_says_so_when_humour_is_off(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    from agents import jokes
+    from agents.supervisor import joke_node
+
+    monkeypatch.setattr(jokes, "JOKES_ENABLED", False)
+    state = {"messages": [HumanMessage(content="пожартуй")], "service": "", "intent": "JOKE"}
+    assert "вимкнено" in joke_node(state)["messages"][0]["content"]

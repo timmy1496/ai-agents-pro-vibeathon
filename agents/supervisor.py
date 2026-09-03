@@ -18,7 +18,7 @@ from agents.checkpoint import saver
 from agents.config import CHEAP_MODEL
 from agents.models import resolve
 
-Intent = Literal["ALERT", "RCA", "FOLLOWUP", "KB", "REVIEW", "RELEASE", "HUMAN"]
+Intent = Literal["ALERT", "RCA", "FOLLOWUP", "KB", "REVIEW", "RELEASE", "JOKE", "HUMAN"]
 
 # Маркер, за яким видно, що в цьому треді вже є розслідування. Потрібен роутеру:
 # уточнююче питання у треді зі звітом — це FOLLOWUP, а не привід розслідувати наново.
@@ -36,6 +36,8 @@ FOLLOWUP — уточнююче питання про інцидент, який
 KB      — питання по базі знань: постмортеми, runbooks, хто власник, що таке X
 REVIEW  — просять зробити ревізію сервісу, оцінити алерти/логування/ресурси
 RELEASE — просять перевірити метрики після релізу або стежити за викатом
+JOKE    — просять пожартувати або розповісти анекдот: "пожартуй", "анекдот",
+          "розваж", "щось смішне". Тільки коли просять прямо.
 HUMAN   — незрозуміло, або потрібне рішення людини
 
 Витягни назву сервісу, якщо вона є в запиті. Немає — залиш порожнім."""
@@ -123,6 +125,17 @@ def render_review(result: dict) -> str:
     return "\n".join(lines)
 
 
+def joke_node(state: SupervisorState) -> dict:
+    """Жарт на запит. У треді інциденту — до того типу алерту, що там розбирався."""
+    from agents import jokes
+
+    history = " ".join(str(m.content) for m in state["messages"])
+    alertname = next((name for name in jokes.BY_ALERT if name in history), "")
+    joke = jokes.pick(alertname, state.get("service", ""))
+    return {"messages": [{"role": "assistant",
+                          "content": joke or "Гумор вимкнено (SRE_JOKES=0)."}]}
+
+
 def human_node(state: SupervisorState) -> dict:
     return {"messages": [{"role": "assistant",
                           "content": "Не зрозумів запит. Уточни сервіс і що саме перевірити."}]}
@@ -153,7 +166,8 @@ def _next_node(state: SupervisorState) -> str:
     # тому він відповідає на уточнення, не переробляючи розслідування з нуля.
     return {"ALERT": "incident", "RCA": "incident",
             "FOLLOWUP": "knowledge", "KB": "knowledge",
-            "REVIEW": "review", "RELEASE": "release"}.get(state["intent"], "human")
+            "REVIEW": "review", "RELEASE": "release",
+            "JOKE": "joke"}.get(state["intent"], "human")
 
 
 def build_supervisor(checkpointer=None):
@@ -161,14 +175,16 @@ def build_supervisor(checkpointer=None):
     graph.add_node("route", route)
     graph.add_node("knowledge", knowledge_node)
     graph.add_node("incident", incident_node)
+    graph.add_node("joke", joke_node)
     graph.add_node("review", review_node)
     graph.add_node("release", release_node)
     graph.add_node("human", human_node)
 
     graph.add_edge(START, "route")
     graph.add_conditional_edges("route", _next_node,
-                                ["knowledge", "incident", "review", "release", "human"])
-    for node in ("knowledge", "incident", "review", "release", "human"):
+                                ["knowledge", "incident", "review", "release",
+                                 "joke", "human"])
+    for node in ("knowledge", "incident", "review", "release", "joke", "human"):
         graph.add_edge(node, END)
 
     return graph.compile(checkpointer=checkpointer or saver())
