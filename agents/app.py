@@ -64,10 +64,27 @@ def _investigate_and_post(summary: str, thread_id: str) -> None:
 
     # Звіт уже в треді — дописуємо його на місці, а не додаємо нових повідомлень:
     # вердикт критика і виправлення після нього це той самий звіт у кращій редакції.
+    rendered = render_report(outcome)
     reference = published.get("reference")
     if reference:
-        edit_message(reference, render_report(outcome))
+        edit_message(reference, rendered)
+    _remember_investigation(thread_id, summary, rendered)
     _annotate(_service_from(summary), outcome["report"].hypothesis)
+
+
+def _remember_investigation(thread_id: str, question: str, report: str) -> None:
+    """Записує розслідування в пам'ять треда.
+
+    Розслідування йде повз супервізор — напряму в investigate(), щоб звіт можна було
+    опублікувати до критика. Але тоді checkpointer супервізора лишається порожнім,
+    і згадка в тому ж треді приходить у контекст, де нічого не відбувалось: агент
+    чесно відповідає, що не розуміє, про що йдеться. Тому дописуємо стан явно.
+    """
+    supervisor.update_state(
+        {"configurable": {"thread_id": thread_id}},
+        {"messages": [{"role": "user", "content": question},
+                      {"role": "assistant", "content": report}],
+         "intent": "ALERT", "service": _service_from(question)})
 
 
 def _service_from(summary: str) -> str:

@@ -177,3 +177,33 @@ def test_incident_thread_ends_with_exactly_two_messages(monkeypatch, tmp_path):
     assert thread[0]["text"].startswith(":rotating_light:")
     assert "критик" in thread[1]["text"], "вердикт має опинитись усередині звіту"
     assert "регресія в v1.5.0" in thread[1]["text"]
+
+
+def test_investigation_is_written_into_thread_memory(monkeypatch, tmp_path):
+    """Без цього згадка в треді інциденту приходить у порожній контекст.
+
+    Розслідування йде повз супервізор заради ранньої публікації звіту, тому стан
+    треба записати явно — інакше «а чи було таке раніше?» агент не розуміє.
+    """
+    import agents.app as app_module
+    import agents.tools.actions as actions
+    from agents.incident_agent import RCAReport, Verdict
+
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
+    monkeypatch.setattr(app_module, "_annotate", lambda service, text: None)
+
+    report = RCAReport(service="demo-chaos-svc", root_cause_label="release",
+                       hypothesis="регресія в v1.5.0", confidence=0.93,
+                       evidence=[], recommended_actions=["відкотити"])
+    monkeypatch.setattr("agents.incident_agent.investigate",
+                        lambda alert, config=None, on_report=None, **kw: (
+                            on_report(report),
+                            {"report": report, "verdict": Verdict(grounded=True, verdict="ACCEPT"),
+                             "revisions": 0, "state": {"messages": []}})[1])
+
+    app_module._investigate_and_post("HighErrorRate critical на demo-chaos-svc: 34%", "інцидент-1")
+
+    saved = app_module.supervisor.get_state(
+        {"configurable": {"thread_id": "інцидент-1"}}).values["messages"]
+    assert len(saved) == 2, "у пам'яті треда мають бути питання і звіт"
+    assert "регресія в v1.5.0" in saved[-1].content
