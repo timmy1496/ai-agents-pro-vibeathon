@@ -70,8 +70,8 @@ def test_incident_flow_does_not_joke_on_its_own(monkeypatch, tmp_path):
     import agents.tools.actions as actions
 
     monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
-    monkeypatch.setattr(app_module, "_handle",
-                        lambda text, thread_id: actions.post_slack.invoke(
+    monkeypatch.setattr(app_module, "_investigate_and_post",
+                        lambda summary, thread_id: actions.post_slack.invoke(
                             {"thread_id": thread_id, "text": "звіт RCA"}))
 
     app_module._process_alert("HighErrorRate critical", "t1")

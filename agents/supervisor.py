@@ -83,10 +83,11 @@ def knowledge_node(state: SupervisorState) -> dict:
     return {"messages": [result["messages"][-1]]}
 
 
-def incident_node(state: SupervisorState) -> dict:
+def incident_node(state: SupervisorState, on_report=None) -> dict:
     from agents.incident_agent import investigate
 
-    outcome = investigate({"summary": _last_user_text(state), "service": state["service"]})
+    outcome = investigate({"summary": _last_user_text(state), "service": state["service"]},
+                          on_report=on_report)
     if outcome["report"] is None:
         return {"messages": [{"role": "assistant",
                               "content": f"Звіт не завершено: {outcome['error']}"}]}
@@ -156,8 +157,9 @@ def render_report(outcome: dict) -> str:
     ]
     if report.similar_incidents:
         lines += ["", "*Схожі інциденти:* " + ", ".join(report.similar_incidents)]
-    lines += ["", f"_критик: {'ok' if outcome['verdict'].grounded else 'зауваження'}, "
-                  f"доопрацювань: {outcome['revisions']}_"]
+    if outcome.get("verdict") is not None:
+        lines += ["", f"_критик: {'ok' if outcome['verdict'].grounded else 'зауваження'}, "
+                      f"доопрацювань: {outcome['revisions']}_"]
     return "\n".join(lines)
 
 

@@ -14,9 +14,10 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(actions, "SLACK_FILE", slack)
     monkeypatch.setattr(app_module, "SLACK_FILE", slack)
     monkeypatch.setattr(app_module, "PROCESSED", tmp_path / "processed.json")
-    monkeypatch.setattr(app_module, "_handle",
-                        lambda text, thread_id: actions.post_slack.invoke(
-                            {"thread_id": thread_id, "text": f"звіт по: {text}"}) and "готово")
+    # підміняємо саме розслідування: воно єдине ходить до моделі
+    monkeypatch.setattr(app_module, "_investigate_and_post",
+                        lambda summary, thread_id: actions.post_slack.invoke(
+                            {"thread_id": thread_id, "text": f"звіт по: {summary}"}))
     return TestClient(app_module.app), slack
 
 

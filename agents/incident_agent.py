@@ -19,11 +19,11 @@ from pydantic import BaseModel, Field
 from agents.config import CHEAP_MODEL, STRONG_MODEL
 from agents.kb import store as kb_store
 from agents.models import resolve
-from agents.tools.actions import create_annotation, propose_action
+from agents.tools.actions import propose_action
 from agents.tools.catalog import get_service
 from agents.tools.kb import search_kb, similar_incidents
 from agents.tools.observability import (
-    golden_signals, query_loki_logs, query_loki_patterns, query_prometheus,
+    golden_signals, incident_snapshot, query_loki_logs, query_loki_patterns, query_prometheus,
 )
 from agents.tools.stand import get_active_alerts, get_deploys, k8s_events
 
@@ -57,14 +57,16 @@ SYSTEM_PROMPT = """Ти — Incident Responder SRE-команди. Твоя ро
 корене­ву причину і дати дії. Ти нічого не змінюєш в інфраструктурі — тільки пропонуєш.
 
 Порядок роботи:
-1. get_active_alerts / вхідний алерт -> який сервіс, severity, мітки.
-2. get_service -> tier, залежності, runbook, власник. Tier визначає терміновість.
-3. golden_signals -> error rate, p95, RPS, рестарти, пам'ять разом з baseline.
-   Ці п'ять сигналів там уже є — не перепитуй їх через query_prometheus. Той потрібен
-   лише для сигналу, якого в golden_signals немає.
-4. query_loki_patterns -> топ патернів помилок за вікно.
-5. get_deploys і k8s_events -> що змінилось: реліз, конфіг, OOM, рестарти.
-6. similar_incidents -> чи було таке раніше і що тоді допомогло.
+1. incident_snapshot(service) — ОДИН виклик, який дає картку сервісу, golden signals
+   з baseline, топ-патерни логів, деплої і події кластера. Починай завжди з нього.
+   Якщо алерт уже наведений у запиті, get_active_alerts кликати не треба.
+2. similar_incidents -> чи було таке раніше і що тоді допомогло.
+3. Далі докликай тули ТІЛЬКИ якщо чогось конкретного бракує: query_prometheus для
+   сигналу, якого немає в snapshot; query_loki_logs щоб глянути конкретні рядки;
+   search_kb за runbook.
+
+Кожен виклик інструмента — це ще один обіг до моделі, а вони складають майже весь час
+розслідування. Не збирай те, що вже є у snapshot.
 
 Як робити висновок:
 - Збіг початку інциденту з деплоєм у межах 15 хвилин -> гіпотеза "release". Не вимагай
@@ -103,16 +105,18 @@ SYSTEM_PROMPT = """Ти — Incident Responder SRE-команди. Твоя ро
 Мова відповіді — українська."""
 
 READ_TOOLS = [
+    incident_snapshot,
     get_active_alerts, get_service,
     golden_signals, query_prometheus, query_loki_patterns, query_loki_logs,
     get_deploys, k8s_events,
     similar_incidents, search_kb,
 ]
-# post_slack тут навмисно немає. Звіт публікує оркестрація — вона єдина знає тред
-# поточного інциденту. Коли тул був доступний моделі, вона викликала його з власним
-# thread_id, і замість відповіді в тред виходило окреме повідомлення в каналі поверх
-# уже опублікованого звіту. Куди писати — рішення оркестрації, а не моделі.
-WRITE_TOOLS = [create_annotation, propose_action]
+# Ні post_slack, ні create_annotation тут немає — обидва виконує оркестрація.
+# Причина спільна: це не рішення, які треба міркувати, а механічні наслідки звіту.
+# Кожен виклик тулу коштує ще одного обігу до моделі (~9 секунд), і платити його за
+# "постав мітку на графіку" безглуздо. Плюс post_slack модель викликала з власним
+# thread_id і створювала окреме повідомлення замість відповіді в тред.
+WRITE_TOOLS = [propose_action]
 
 
 def build_agent(model: str = STRONG_MODEL, checkpointer=None, **kwargs):
@@ -156,13 +160,20 @@ REVISE, якщо: є факт, якого немає у виводах; source �
 ACCEPT в решті випадків, включно з чесним "unknown" при браку даних."""
 
 
+# Скільки виводів тулів показувати критику. Заміряно: на короткому вході дешева модель
+# відповідає за ~2 секунди, а на повному лозі розслідування — за 24. Критику не потрібен
+# увесь JSON: він звіряє факти звіту з доказами, і для цього вистачає початку кожного
+# виводу, де лежать агрегати й патерни.
+CRITIC_LOG_CHARS = 6000
+
+
 def critique(report: RCAReport, tool_log: str, model: str = CHEAP_MODEL) -> Verdict:
     """Дешева модель перевіряє groundedness — сильну на це витрачати нема сенсу."""
     grader = resolve(model).with_structured_output(Verdict)
     return grader.invoke([
         {"role": "system", "content": CRITIC_PROMPT},
         {"role": "user", "content": f"ЗВІТ:\n{report.model_dump_json(indent=2)}\n\n"
-                                    f"ВИВОДИ ІНСТРУМЕНТІВ:\n{tool_log}"},
+                                    f"ВИВОДИ ІНСТРУМЕНТІВ:\n{tool_log[:CRITIC_LOG_CHARS]}"},
     ])
 
 
@@ -190,8 +201,14 @@ def synthesize(tool_log: str, alert: dict, model: str = STRONG_MODEL) -> RCARepo
 
 
 def investigate(alert: dict, agent=None, max_revisions: int = MAX_REVISIONS,
-                config: dict | None = None) -> dict:
+                config: dict | None = None, on_report=None) -> dict:
     """Повний цикл: розслідування -> критика -> доопрацювання (не більше max_revisions).
+
+    on_report — колбек, що викликається щойно з'явився перший звіт, ДО критика.
+    Критик коштує 15-40 секунд (латентність провайдера гуляє), і змушувати людину
+    чекати на нього немає сенсу: звіт уже готовий, а вердикт — примітка до нього.
+    Хто читає у Slack, бачить звіт удвічі швидше; евали колбек не передають і
+    отримують той самий строгий цикл, що й раніше.
 
     Повертає звіт, вердикт і кількість обертів — усе троє потрібні евалам.
     """
@@ -211,6 +228,9 @@ def investigate(alert: dict, agent=None, max_revisions: int = MAX_REVISIONS,
                         "error": "агент зупинився на підтвердженні людини"}
             report = synthesize(_tool_log(state["messages"]), alert)
             fallback = True
+
+        if on_report is not None and revision == 0:
+            on_report(report)
         verdict = critique(report, _tool_log(state["messages"]))
         if verdict.verdict == "ACCEPT":
             return {"report": report, "verdict": verdict, "revisions": revision,

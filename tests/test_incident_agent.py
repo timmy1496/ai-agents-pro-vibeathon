@@ -141,7 +141,58 @@ def test_agent_cannot_post_to_slack_itself():
     assert "post_slack" not in {tool.name for tool in WRITE_TOOLS}
 
 
-def test_agent_still_has_annotation_and_proposal():
+def test_write_tools_are_only_the_proposal():
+    """Публікація і мітки — механічні наслідки звіту, їх робить оркестрація.
+
+    Кожен виклик тулу коштує ще одного обігу до моделі, тож платити його за
+    "постав мітку на графіку" безглуздо.
+    """
     from agents.incident_agent import WRITE_TOOLS
 
-    assert {tool.name for tool in WRITE_TOOLS} == {"create_annotation", "propose_action"}
+    assert {tool.name for tool in WRITE_TOOLS} == {"propose_action"}
+
+
+def test_critic_input_is_capped():
+    """Критику передається обмежений лог: на повному він думає 24 секунди замість двох."""
+    import inspect
+
+    from agents.incident_agent import CRITIC_LOG_CHARS, critique
+
+    assert "CRITIC_LOG_CHARS" in inspect.getsource(critique)
+    assert CRITIC_LOG_CHARS <= 8000
+
+
+def test_report_is_published_before_the_critic_runs():
+    """Критик коштує 15-40 секунд; тримати через нього готовий звіт немає сенсу."""
+    from agents.incident_agent import RCAReport, Verdict, investigate
+
+    order = []
+    report = RCAReport(service="s", root_cause_label="release", hypothesis="h",
+                       confidence=0.9, evidence=[], recommended_actions=[])
+
+    class FakeAgent:
+        def invoke(self, state, config=None):
+            order.append("розслідування")
+            return {"messages": [], "structured_response": report}
+
+    import agents.incident_agent as module
+
+    original = module.critique
+    module.critique = lambda *a, **k: order.append("критик") or Verdict(grounded=True,
+                                                                       verdict="ACCEPT")
+    try:
+        investigate({"summary": "алерт"}, agent=FakeAgent(),
+                    on_report=lambda r: order.append("публікація"))
+    finally:
+        module.critique = original
+
+    assert order == ["розслідування", "публікація", "критик"], order
+
+
+def test_evals_still_get_the_strict_loop():
+    """Без колбека поведінка не змінюється: евали отримують той самий цикл."""
+    import inspect
+
+    from agents.incident_agent import investigate
+
+    assert inspect.signature(investigate).parameters["on_report"].default is None

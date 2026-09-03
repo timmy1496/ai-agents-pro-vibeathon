@@ -147,3 +147,44 @@ def test_golden_signals_survive_a_dead_prometheus(monkeypatch):
 
     assert set(signals) == {"error_rate", "latency_p95", "rps", "restarts", "memory_bytes"}
     assert all(s["current_avg"] is None for s in signals.values())
+
+
+def test_snapshot_collects_everything_in_one_call(http, monkeypatch, tmp_path):
+    """Один виклик замість чотирьох: кожен тул — це ще один обіг до моделі."""
+    import json as json_module
+
+    import agents.tools.stand as stand
+    from agents.tools.observability import incident_snapshot
+
+    http.responses["/loki/api/v1/query_range"] = fixtures.loki_lines(fixtures.ERROR_LOG_LINES)
+    http.responses["/api/v1/query_range"] = fixtures.prom_range([0.3], service="demo-chaos-svc")
+    monkeypatch.setattr(stand, "DATA_DIR", tmp_path)
+    (tmp_path / "deploys.json").write_text(json_module.dumps(
+        [{"ts": "2099-01-01T00:00:00Z", "service": "demo-chaos-svc", "version": "1.5.0"}]))
+
+    snapshot = incident_snapshot.invoke({"service": "demo-chaos-svc"})
+
+    assert set(snapshot) == {"service_card", "signals", "log_patterns", "deploys", "k8s_events"}
+    assert snapshot["service_card"]["tier"] == 1
+    assert snapshot["signals"]["error_rate"]["baseline_avg"] is not None
+    assert snapshot["log_patterns"], "патерни логів мають бути в тому ж виклику"
+    assert snapshot["deploys"][0]["version"] == "1.5.0"
+
+
+def test_snapshot_survives_a_dead_source(http, monkeypatch, tmp_path):
+    """Недоступний Loki не має валити весь знімок."""
+    import agents.tools.stand as stand
+    from agents.tools import observability
+
+    monkeypatch.setattr(stand, "DATA_DIR", tmp_path)
+
+    def only_prometheus(url, params):
+        if "/loki/" in url:
+            raise TimeoutError("timed out")
+        return fixtures.prom_range([0.3])
+
+    monkeypatch.setattr(observability, "_get", only_prometheus)
+    snapshot = observability.incident_snapshot.invoke({"service": "demo-chaos-svc"})
+
+    assert snapshot["log_patterns"] == []
+    assert snapshot["signals"]["error_rate"]["current_avg"] is not None
