@@ -288,3 +288,57 @@ def test_missing_cli_says_what_to_do(monkeypatch):
 def test_model_id_is_stripped_of_the_provider_prefix():
     assert cc.build("anthropic:claude-sonnet-5").model == "claude-sonnet-5"
     assert cc.build("anthropic/claude-haiku-4.5").model == "claude-haiku-4.5"
+
+
+def test_denied_builtin_tool_is_a_distinct_failure(monkeypatch):
+    """`--allowed-tools ""` знімає ДОЗВІЛ на вбудовані інструменти, але не прибирає їх
+    зі схеми: модель їх бачить і час від часу тягнеться до Read чи Bash, а CLI на це
+    обриває виклик з кодом 1. Без окремого типу справжня причина губилась у сирому
+    JSON від CLI — це двічі коштувало кейса cfg-02."""
+    built = cc.ClaudeCodeChatModel(model="m")
+
+    class Done:
+        returncode = 1
+        stdout = json.dumps({"stop_reason": "tool_use", "result": None})
+        stderr = ""
+
+    monkeypatch.setattr(cc.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(cc.subprocess, "run", lambda *a, **k: Done())
+
+    with pytest.raises(cc.ToolAttempt, match="вбудованим інструментом"):
+        built._run_cli("sys", "prompt")
+
+
+def test_tool_attempt_is_retried_with_the_environment_reminder(monkeypatch):
+    """Нагадування про ФОРМАТ тут не діє — модель вирішила, що в неї є середовище."""
+    built = cc.ClaudeCodeChatModel(model="m")
+    prompts: list[str] = []
+    outcomes = ["abort", "ok"]
+
+    def fake_run(self, system, prompt):
+        prompts.append(prompt)
+        if outcomes.pop(0) == "abort":
+            raise cc.ToolAttempt("модель спробувала скористатись вбудованим інструментом")
+        return payload('{"reasoning": "r", "content": "готово"}')
+
+    monkeypatch.setattr(cc.ClaudeCodeChatModel, "_run_cli", fake_run)
+    bound = built.model_copy(update={"tools": [tool_spec()]})
+    bound.spend = built.spend
+
+    assert bound.invoke([{"role": "user", "content": "?"}]).content == "готово"
+    assert "інструмент середовища" in prompts[1], \
+        "повтор має нагадати про середовище, а не про формат"
+
+
+def test_repeated_tool_attempts_eventually_surface(monkeypatch):
+    built = cc.ClaudeCodeChatModel(model="m")
+
+    def always_abort(self, system, prompt):
+        raise cc.ToolAttempt("знову інструмент")
+
+    monkeypatch.setattr(cc.ClaudeCodeChatModel, "_run_cli", always_abort)
+    bound = built.model_copy(update={"tools": [tool_spec()]})
+    bound.spend = built.spend
+
+    with pytest.raises(cc.ToolAttempt):
+        bound.invoke([{"role": "user", "content": "?"}])

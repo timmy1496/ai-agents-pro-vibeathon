@@ -95,6 +95,15 @@ class ClaudeCodeError(RuntimeError):
         self.raw = raw
 
 
+class ToolAttempt(ClaudeCodeError):
+    """Модель потягнулась до вбудованого інструмента Claude Code, і CLI обірвався.
+
+    Окремий тип, бо лікується інакше: тут не «відповідь не тієї форми», а «модель
+    вирішила, що в неї є середовище». Нагадування про формат тут не діє — діє
+    нагадування про те, що інструментів у неї немає.
+    """
+
+
 def _strip_fence(text: str) -> str:
     """Модель час від часу загортає JSON у ```json — знімаємо, це не помилка формату."""
     fenced = re.search(r"```(?:json)?\s*(.+?)\s*```", text, re.DOTALL)
@@ -247,8 +256,20 @@ class ClaudeCodeChatModel(BaseChatModel):
             os.unlink(system_file)
 
         if completed.returncode != 0:
-            # CLI друкує причину то в stderr, то в stdout — беремо обидва, інакше
-            # діагностика зводиться до «код 1» без жодної підказки.
+            # Найчастіша причина ненульового коду — не помилка транспорту, а спроба
+            # моделі скористатись вбудованим інструментом Claude Code. Розрізняти їх
+            # обов'язково: перше лікується повтором з іншим нагадуванням, друге —
+            # нічим. Без розрізнення в лог летить сирий JSON CLI, а справжня причина
+            # губиться в ньому (це вже коштувало кейса cfg-02 двічі).
+            try:
+                aborted = json.loads(completed.stdout).get("stop_reason") == "tool_use"
+            except (json.JSONDecodeError, AttributeError):
+                aborted = False
+            if aborted:
+                raise ToolAttempt(
+                    "модель спробувала скористатись вбудованим інструментом Claude Code "
+                    "замість протоколу — CLI обірвав виклик")
+
             detail = (completed.stderr or completed.stdout or "(порожньо)").strip()
             raise ClaudeCodeError(
                 f"{CLI} вийшов з кодом {completed.returncode}. "
@@ -287,7 +308,20 @@ class ClaudeCodeChatModel(BaseChatModel):
             return self._to_message(_first_object(result), payload.get("usage", {}))
 
         try:
-            message = attempt(prompt)
+            return ChatResult(generations=[ChatGeneration(message=attempt(prompt))])
+        except ToolAttempt:
+            # Не формат, а середовище: повторюємо з прямою вказівкою. Дві спроби, бо
+            # модель із довгим extended thinking зривається сюди повторно, а втрачений
+            # кейс коштує дорожче за два виклики.
+            for _ in range(2):
+                try:
+                    return ChatResult(generations=[ChatGeneration(message=attempt(
+                        f"{prompt}\n\n{NO_ENV_TOOLS}\n[СИСТЕМА] Попередня спроба "
+                        f"обірвалась, бо ти викликав інструмент середовища. Їх немає. "
+                        f"Єдина доступна дія — JSON за протоколом."))])
+                except ToolAttempt:
+                    continue
+            raise
         except ClaudeCodeError as first:
             message = self._recover(system, prompt, first, attempt)
 
