@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from agents.observability import trace_config
+from agents import jokes
 from agents.config import DATA_DIR
 from agents.supervisor import build_supervisor
 from agents.tools.actions import SLACK_FILE, post_slack
@@ -31,7 +32,7 @@ def _handle(text: str, thread_id: str) -> str:
     return answer
 
 
-def _process_alert(summary: str, thread_id: str) -> None:
+def _process_alert(summary: str, thread_id: str, alertname: str = "") -> None:
     """Оголошення алерту і розслідування — обидва у фоні.
 
     Публікація в Slack — синхронний мережевий виклик, і в async-ендпоінті вона
@@ -39,6 +40,10 @@ def _process_alert(summary: str, thread_id: str) -> None:
     її по дедлайну, тож у самому обробнику не має лишитись ніякого вводу-виводу.
     """
     post_slack.invoke({"thread_id": thread_id, "text": f":rotating_light: {summary}"})
+    joke = jokes.pick(alertname, thread_id)
+    if joke:
+        # закриває 30-60 секунд тиші, поки йде розслідування
+        post_slack.invoke({"thread_id": thread_id, "text": joke})
     _handle(summary, thread_id)
 
 
@@ -68,7 +73,8 @@ async def alertmanager_webhook(payload: dict, background: BackgroundTasks) -> di
                                  "text": f":white_check_mark: {labels.get('alertname')} "
                                          f"на {labels.get('service')} — вирішено"})
         else:
-            background.add_task(_process_alert, summary, thread_id)
+            background.add_task(_process_alert, summary, thread_id,
+                                labels.get("alertname", ""))
         threads.append(thread_id)
     return {"accepted": len(threads), "skipped_duplicates": skipped, "threads": threads}
 

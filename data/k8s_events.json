@@ -152,5 +152,19 @@
     "reason": "Created",
     "message": "Created container chaos-svc (v1.5.0)",
     "ts": "2026-09-03T20:08:28Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T20:17:28Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T20:23:43Z"
   }
 ]
