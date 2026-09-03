@@ -57,7 +57,7 @@ def test_k8s_events_surface_oom(data_dir):
 def test_active_alerts_are_flattened(monkeypatch):
     import agents.tools.stand as stand
 
-    monkeypatch.setattr(stand, "_get", lambda url, params: [{
+    monkeypatch.setattr(stand, "_safe_get", lambda url, params: [{
         "labels": {"alertname": "HighErrorRate", "service": "demo-chaos-svc", "severity": "critical"},
         "annotations": {"summary": "error rate 34%", "runbook_url": "kb/runbooks/high-error-rate.md"},
         "startsAt": "2026-09-02T10:00:00Z",

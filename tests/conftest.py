@@ -14,6 +14,31 @@ def no_real_slack(monkeypatch):
     monkeypatch.setattr(slack, "SLACK_BOT_TOKEN", "")
 
 
+@pytest.fixture(autouse=True)
+def no_real_models(monkeypatch, request):
+    """Тести не мають права звертатись до реальної моделі.
+
+    DeepSeek (як і будь-який провайдер) — режим роботи, не режим тестування: прогін
+    має лишатись безкоштовним, офлайновим і відтворюваним. Тести підставляють
+    ScriptedChatModel, а resolve() віддає готовий екземпляр як є, тому це не заважає.
+
+    Виняток — тести самого резолвера: вони перевіряють, що клієнт створюється правильно,
+    але не викликають його.
+    """
+    if request.node.get_closest_marker("uses_real_models") or \
+            request.node.module.__name__.endswith("test_models"):
+        return
+
+    import agents.models as models
+
+    def refuse(model, temperature=0.0):
+        raise AssertionError(
+            f"тест намагається створити реальну модель ({model}). "
+            f"Підстав ScriptedChatModel з tests/fake_model.py")
+
+    monkeypatch.setattr(models, "_build", refuse)
+
+
 @pytest.fixture(scope="session")
 def kb_indexed():
     """Один індекс KB у пам'яті на всю сесію тестів — переіндексація коштує секунди."""
