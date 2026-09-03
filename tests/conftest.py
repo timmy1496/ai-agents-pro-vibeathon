@@ -7,6 +7,6 @@ def kb_indexed():
     from agents.kb import store
 
     store.QDRANT_URL = ":memory:"
-    store.client.cache_clear()
+    store._shared_client.cache_clear()
     store.reindex()
     return store

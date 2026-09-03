@@ -50,7 +50,7 @@ def indexed(monkeypatch_module=None):
 
     config.QDRANT_URL = ":memory:"
     store.QDRANT_URL = ":memory:"
-    store.client.cache_clear()
+    store._shared_client.cache_clear()
     store.reindex()
     return store
 

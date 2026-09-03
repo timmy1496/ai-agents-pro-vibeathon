@@ -25,18 +25,27 @@ PAYLOAD_FIELDS = ("text", "source", "title", "headings", "type", "service", "ser
                   "date", "tags", "root_cause_label", "severity")
 
 
-# ponytail: один RLock на весь доступ до Qdrant. Причина не в самій базі, а в клієнті:
-# при локальному інференсі QdrantClient тримає спільний акумулятор батчів ембеддингів і
-# ламається, коли агент кличе тули паралельно ("dictionary changed size during iteration",
-# а на індексації — напівстворені вектори). Ціна: пошук по KB серіалізований.
-# Прибрати, коли ембеддинги рахуватиме окремий сервіс, а не клієнт у процесі агента.
+# Потокобезпечність. Проблема не в базі, а в клієнті: він тримає спільний акумулятор
+# батчів ембеддингів і ламається при паралельних викликах ("dictionary changed size
+# during iteration", а на індексації — напівстворені вектори).
+#
+# Проти живого сервера рішення — свій клієнт на потік: акумулятори не перетинаються,
+# а конкурентність тримає сам Qdrant. Спершу тут був один RLock на все, і під сімома
+# паралельними розслідуваннями запити почали вставати в чергу і падати по таймауту.
+#
+# У режимі ":memory:" так не можна — база живе всередині клієнта, тож там лишається
+# один спільний екземпляр під локом.
 _lock = threading.RLock()
+_thread_local = threading.local()
+CLIENT_TIMEOUT = 30  # секунд: локальний інференс ембеддингів довший за дефолтні 5
 
 
 def _guarded(function):
-    """Серіалізує виклик — див. коментар біля _lock."""
+    """Серіалізує виклик лише в режимі ":memory:" — див. коментар біля _lock."""
     @functools.wraps(function)
     def wrapper(*args, **kwargs):
+        if not _is_local():
+            return function(*args, **kwargs)
         with _lock:
             return function(*args, **kwargs)
 
@@ -44,10 +53,21 @@ def _guarded(function):
 
 
 @functools.cache
+def _shared_client() -> QdrantClient:
+    """Спільний екземпляр для режиму ":memory:" — база живе в самому клієнті."""
+    return QdrantClient(location=QDRANT_URL)
+
+
 def client() -> QdrantClient:
-    # ":memory:" — локальний режим без docker: так евали й тести бігають офлайн.
-    return QdrantClient(location=QDRANT_URL) if QDRANT_URL.startswith(":") \
-        else QdrantClient(url=QDRANT_URL)
+    if QDRANT_URL.startswith(":"):
+        return _shared_client()
+    if not hasattr(_thread_local, "client"):
+        _thread_local.client = QdrantClient(url=QDRANT_URL, timeout=CLIENT_TIMEOUT)
+    return _thread_local.client
+
+
+def _is_local() -> bool:
+    return QDRANT_URL.startswith(":")
 
 
 @functools.cache

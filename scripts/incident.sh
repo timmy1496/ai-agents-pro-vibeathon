@@ -31,7 +31,7 @@ case "${1:-}" in
     ;;
   3)
     echo "== Сценарій 3: memory leak -> OOMKilled рестарти =="
-    curl -sf -X POST "$CHAOS/chaos/oom?mb_per_sec=32" && echo
+    curl -sf -X POST "$CHAOS/chaos/oom?mb_per_sec=16" && echo
     python3 "$ROOT/scripts/record.py" k8s demo-chaos-svc OOMKilling "Memory cgroup out of memory: Killed process (uvicorn), limit 256Mi"
     python3 "$ROOT/scripts/record.py" k8s demo-chaos-svc BackOff "Back-off restarting failed container chaos-svc"
     echo "-> очікуй HighMemoryUsage за ~1 хв, далі FrequentRestarts"
@@ -39,6 +39,7 @@ case "${1:-}" in
   reset)
     echo "== Скидання chaos =="
     curl -sf -X POST "$CHAOS/chaos/reset" && echo
+    # маркер витоку прибирає сам /chaos/reset, тому рестарт уже чистий
     docker compose restart chaos-svc >/dev/null && echo "chaos-svc перезапущено"
     ;;
   *)

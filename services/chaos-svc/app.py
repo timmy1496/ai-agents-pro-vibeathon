@@ -4,8 +4,10 @@
 що й потрібно для сценарію OOM.
 """
 import asyncio
+import contextlib
 import json
 import os
+import pathlib
 import random
 import sys
 import time
@@ -28,6 +30,11 @@ BUILD.labels(version=VERSION).set(1)
 
 chaos = {"latency_ms": 0, "error_rate": 0.0, "db_down": False}
 _ballast: list[bytes] = []  # тримає пам'ять для сценарію OOM
+
+# Витік має пережити рестарт: справжній leak живе в коді, і після OOMKilled
+# контейнер піднімається й тече знову. Без цього маркера сценарій дає рівно один
+# рестарт, RSS не встигає зіскрапитись, і жоден з алертів на ресурси не спрацьовує.
+LEAK_MARKER = pathlib.Path("/tmp/chaos-leak")
 
 app = FastAPI()
 
@@ -105,24 +112,42 @@ async def chaos_db_down(enabled: bool = True):
     return chaos
 
 
-@app.post("/chaos/oom")
-async def chaos_oom(mb_per_sec: int = 32):
-    """Тече пам'яттю, поки docker не вб'є контейнер по mem_limit → рестарти."""
-    async def leak():
-        while True:
-            _ballast.append(b"x" * (mb_per_sec * 1024 * 1024))
-            log("warn", "memory ballast grew", mb=len(_ballast) * mb_per_sec)
-            await asyncio.sleep(1)
+async def _leak(mb_per_sec: int) -> None:
+    while True:
+        _ballast.append(b"x" * (mb_per_sec * 1024 * 1024))
+        log("warn", "memory ballast grew", mb=len(_ballast) * mb_per_sec)
+        await asyncio.sleep(1)
 
-    asyncio.create_task(leak())
+
+@app.post("/chaos/oom")
+async def chaos_oom(mb_per_sec: int = 16):
+    """Тече пам'яттю, поки docker не вб'є контейнер по mem_limit → рестарти.
+
+    16 МБ/с, а не 32: при ліміті 256 МБ це ~16 секунд до OOM, тобто три-чотири
+    скрейпи Prometheus встигають побачити зростання RSS і підняти HighMemoryUsage
+    ще до падіння. На 32 МБ/с сервіс помирав між скрейпами і на графіку не лишалось нічого.
+    """
+    LEAK_MARKER.write_text(str(mb_per_sec))
+    asyncio.create_task(_leak(mb_per_sec))
     log("warn", "chaos: memory leak started", mb_per_sec=mb_per_sec)
     return {"leaking": True, "mb_per_sec": mb_per_sec}
+
+
+@app.on_event("startup")
+async def resume_leak() -> None:
+    """Після OOMKilled контейнер стартує знову — і витік має продовжитись."""
+    if LEAK_MARKER.exists():
+        mb_per_sec = int(LEAK_MARKER.read_text() or 16)
+        asyncio.create_task(_leak(mb_per_sec))
+        log("warn", "chaos: memory leak resumed after restart", mb_per_sec=mb_per_sec)
 
 
 @app.post("/chaos/reset")
 async def chaos_reset():
     chaos.update(latency_ms=0, error_rate=0.0, db_down=False)
     _ballast.clear()
+    with contextlib.suppress(FileNotFoundError):
+        LEAK_MARKER.unlink()
     log("info", "chaos: reset")
     return chaos
 

@@ -24,7 +24,7 @@ groups:
           runbook_url: "kb/runbooks/high-latency.md"
 
       - alert: FrequentRestarts
-        expr: changes(process_start_time_seconds[10m]) > 2
+        expr: changes(process_start_time_seconds{service!=""}[10m]) > 2
         for: 0s
         labels:
           severity: critical
@@ -33,7 +33,7 @@ groups:
           runbook_url: "kb/runbooks/oomkilled-restarts.md"
 
       - alert: HighMemoryUsage
-        expr: process_resident_memory_bytes > 180e6
+        expr: process_resident_memory_bytes{service!=""} > 180e6
         for: 30s
         labels:
           severity: warning
