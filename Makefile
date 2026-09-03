@@ -65,3 +65,7 @@ demo-degradation:  ## Демо тихої деградації: змінили �
 .PHONY: slack-check
 slack-check:   ## Перевірити Slack: токен, канал, права, тред
 	.venv/bin/python -m scripts.slack_check
+
+.PHONY: slack-bot
+slack-bot:     ## Слухати Slack через Socket Mode (згадка бота -> відповідь у тред)
+	.venv/bin/python -m agents.slack_bot

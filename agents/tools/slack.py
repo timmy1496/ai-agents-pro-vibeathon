@@ -57,10 +57,22 @@ def _call(payload: dict) -> dict:
         return json.loads(response.read())
 
 
+def remember_thread(thread_id: str, thread_ts: str) -> None:
+    """Прив'язує наш ідентифікатор до наявного треда Slack.
+
+    Потрібно, коли тред створив не агент, а людина — згадкою бота в каналі.
+    """
+    mapping = _load_map()
+    if mapping.get(thread_id) != thread_ts:
+        mapping[thread_id] = thread_ts
+        _save_map(mapping)
+
+
 def post(thread_id: str, text: str, channel: str = "") -> dict:
     """Пише в тред інциденту, створюючи його першим повідомленням.
 
-    thread_id — наш ідентифікатор (fingerprint алерту), не Slack-івський.
+    thread_id — наш ідентифікатор (fingerprint алерту або ts треда), не обов'язково
+    Slack-івський.
     """
     mapping = _load_map()
     payload = {

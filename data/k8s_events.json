@@ -68,5 +68,12 @@
     "reason": "BackOff",
     "message": "Back-off restarting failed container chaos-svc",
     "ts": "2026-09-03T16:23:32Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "type": "Normal",
+    "reason": "Created",
+    "message": "Created container chaos-svc (v1.5.0)",
+    "ts": "2026-09-03T18:42:51Z"
   }
 ]
