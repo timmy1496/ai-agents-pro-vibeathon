@@ -132,3 +132,45 @@ def test_gate_thresholds_are_all_declared():
     }
     assert required <= set(config.gate())
     assert all(0.0 <= value <= 1.0 for value in config.gate().values())
+
+
+def test_dataset_digest_notices_a_changed_fixture(tmp_path, monkeypatch):
+    """Збігу списку id недостатньо: кейс може лишитись собою за іменем і змінитись за суттю.
+
+    cap-02 лишився cap-02, коли його фікстури переписали — стара редакція карала агента
+    за правильну відповідь. Дельта через таку правку показала б зміну агента там, де
+    змінилось завдання.
+    """
+    from evals import cases as dataset
+
+    before = config.dataset_digest()
+    copy = tmp_path / "cases.yaml"
+    copy.write_text(dataset.CASES_FILE.read_text(encoding="utf-8") + "\n# правка\n",
+                    encoding="utf-8")
+
+    monkeypatch.setattr(dataset, "CASES_FILE", copy)
+    config.dataset_digest.cache_clear()
+    try:
+        assert config.dataset_digest() != before
+    finally:
+        config.dataset_digest.cache_clear()
+
+
+def test_a_run_is_comparable_only_to_its_own_instrument():
+    """П'ять полів meta, і кожне з них — частина інструмента, а не налаштування."""
+    from evals.run import comparable
+
+    from agents.models import provider
+
+    same = {"rubric_version": config.rubric_version(), "judge_model": config.judge_model(),
+            "provider": provider(), "case_ids": [], "dataset_sha": config.dataset_digest()}
+    import evals.run as run_module
+
+    run_module._case_ids[:] = []
+    assert comparable(same)
+
+    for field, other in (("rubric_version", "r999"), ("judge_model", "інша-модель"),
+                         ("provider", "інший-транспорт"), ("case_ids", ["rel-01"]),
+                         ("dataset_sha", "0" * 64)):
+        assert not comparable({**same, field: other}), \
+            f"прогони з різним {field} не мають порівнюватись"

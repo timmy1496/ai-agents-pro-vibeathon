@@ -124,8 +124,8 @@ def check_gate(summary: dict, previous: dict | None) -> list[str]:
 def comparable(meta: dict) -> bool:
     """Чи можна порівнювати цей прогін з поточним.
 
-    Чотири речі мають збігтись, і всі чотири — частини вимірювального інструмента, а не
-    налаштування: версія рубрики, модель судді, ПРОВАЙДЕР і НАБІР КЕЙСІВ.
+    П'ять речей мають збігтись, і всі п'ять — частини вимірювального інструмента, а не
+    налаштування: версія рубрики, модель судді, ПРОВАЙДЕР, набір кейсів і ВМІСТ датасету.
 
     Провайдер тут не для повноти: через Claude Code CLI tool calling промптовий, а не
     нативний, тобто агент виконує іншу механіку виклику інструментів. Дельта між
@@ -134,13 +134,18 @@ def comparable(meta: dict) -> bool:
     Набір кейсів — з тієї ж причини. `--case rel-01` і `--case rel-02` дають по одному
     числу кожен, і різниця між ними це різниця кейсів, а не зміна агента. Раніше вони
     порівнювались між собою і друкували дельту, яка нічого не означала.
+
+    Вміст датасету — окремо від набору id, бо кейс може лишитись собою за іменем і
+    змінитись за суттю: cap-02 лишився cap-02, коли його фікстури переписали. Дельта
+    через таку правку показала б зміну агента там, де змінилось завдання.
     """
     from agents.models import provider
 
     return (meta.get("rubric_version") == config.rubric_version()
             and meta.get("judge_model") == config.judge_model()
             and meta.get("provider") == provider()
-            and meta.get("case_ids") == _case_ids)
+            and meta.get("case_ids") == _case_ids
+            and meta.get("dataset_sha") == config.dataset_digest())
 
 
 _case_ids: list[str] = []
@@ -226,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
             "provider": transport,
             "cases": len(rows),
             "case_ids": _case_ids,
+            "dataset_sha": config.dataset_digest(),
             "spend": spend(),
         },
         "summary": summary,

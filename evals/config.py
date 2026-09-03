@@ -50,6 +50,21 @@ def prompts_digest() -> str:
     return digest.hexdigest()
 
 
+@functools.cache
+def dataset_digest() -> str:
+    """Digest самого датасету.
+
+    Збігу СПИСКУ id недостатньо, і це не теорія: cap-02 лишився cap-02, але його
+    фікстури переписали (RPS 88->90 замінили на сплеск утричі), бо стара редакція
+    карала агента за правильну відповідь. Прогони до і після цієї правки міряють різні
+    речі під тими самими іменами — рівно та помилка, від якої стережуть prompts_sha і
+    пін судді, тільки з іншого боку.
+    """
+    from evals.cases import CASES_FILE
+
+    return hashlib.sha256(CASES_FILE.read_bytes()).hexdigest()
+
+
 def rubric_version() -> str:
     return load()["judge"]["rubric_version"]
 
