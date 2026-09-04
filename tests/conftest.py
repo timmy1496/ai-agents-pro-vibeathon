@@ -20,12 +20,14 @@ import pytest
 # перестає перевірятись — а сьют лишається зеленим і навіть швидшає. Число піднімають
 # разом з новими тестами; воно завжди трохи нижче за фактичне, щоб не червоніти на
 # кожному видаленому параметрі.
-MIN_COLLECTED = 290
+MIN_COLLECTED = 300
 
 def pytest_collection_modifyitems(session, config, items):
     """Гард працює лише на повному прогоні: `pytest tests/test_kb.py` збирає менше і це нормально."""
+    global COLLECTED
     targets = [a for a in config.args if not a.startswith("-")]
     full_run = not targets or all(pathlib.Path(t).name in ("tests", "") for t in targets)
+    COLLECTED = len(items) if full_run else 0
     if full_run and len(items) < MIN_COLLECTED:
         raise pytest.UsageError(
             f"зібрано лише {len(items)} тестів при підлозі {MIN_COLLECTED} — "
