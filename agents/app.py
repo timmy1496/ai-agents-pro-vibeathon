@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from agents.config import AGENT_TOKEN, AGENT_TOKEN_IS_DEFAULT
 from agents.observability import trace_config
 from agents.config import DATA_DIR
+from agents.threadlock import thread_lock
 from agents.supervisor import build_supervisor
 from agents.tools.actions import SLACK_FILE, create_annotation, edit_message, post_slack
 
@@ -54,8 +55,9 @@ def _handle(text: str, thread_id: str) -> str:
     а справжня причина лишається в stderr процесу.
     """
     try:
-        state = supervisor.invoke({"messages": [{"role": "user", "content": text}]},
-                                  config=trace_config(thread_id, tags=["sre-agent"]))
+        with thread_lock(thread_id):
+            state = supervisor.invoke({"messages": [{"role": "user", "content": text}]},
+                                      config=trace_config(thread_id, tags=["sre-agent"]))
         answer = str(state["messages"][-1].content)
     except Exception as error:
         log.exception("розслідування у треді %s не завершилось", thread_id)
@@ -90,39 +92,45 @@ def _investigate_and_post(summary: str, thread_id: str) -> None:
         # ніж критик закінчить. У тому вікні контекст мусить уже бути.
         _remember_investigation(thread_id, summary, rendered)
 
-    try:
-        outcome = investigate({"summary": summary, "service": _service_from(summary)},
-                              config=trace_config(thread_id, tags=["sre-agent"]),
-                              on_report=publish)
-    except Exception as error:
-        # Розслідування бігає у фоні, тому виняток тут нікому повернути: HTTP-відповідь
-        # Alertmanager отримав кілька десятків секунд тому. Без цього блоку скінчений
-        # ключ, недоступний провайдер або впала залежність виглядають однаково — як тред,
-        # у якому черговий чекає на відповідь, якої вже не буде, а причина лишається
-        # в stderr процесу.
-        log.exception("розслідування у треді %s не завершилось", thread_id)
-        post_slack.invoke({
-            "thread_id": thread_id,
-            "text": f":warning: Розслідування не завершилось: "
-                    f"{type(error).__name__}: {error}\n"
-                    f"Алерт лишається відкритим — розбирає людина."})
-        return
+    # Лок на весь час розслідування: поки звіт не ліг у пам'ять треда, той не має
+    # брати інший прогін графа. LangGraph складає чекпоінти ланцюжком за
+    # parent_checkpoint_id, тому паралельний прогін дописав би свій результат до
+    # знімка, знятого ДО публікації, і звіт зник би з контексту — саме так під час
+    # демо жарт, замовлений посеред розслідування, зʼїв готовий RCA.
+    with thread_lock(thread_id):
+        try:
+            outcome = investigate({"summary": summary, "service": _service_from(summary)},
+                                  config=trace_config(thread_id, tags=["sre-agent"]),
+                                  on_report=publish)
+        except Exception as error:
+            # Розслідування бігає у фоні, тому виняток тут нікому повернути: HTTP-відповідь
+            # Alertmanager отримав кілька десятків секунд тому. Без цього блоку скінчений
+            # ключ, недоступний провайдер або впала залежність виглядають однаково — як тред,
+            # у якому черговий чекає на відповідь, якої вже не буде, а причина лишається
+            # в stderr процесу.
+            log.exception("розслідування у треді %s не завершилось", thread_id)
+            post_slack.invoke({
+                "thread_id": thread_id,
+                "text": f":warning: Розслідування не завершилось: "
+                        f"{type(error).__name__}: {error}\n"
+                        f"Алерт лишається відкритим — розбирає людина."})
+            return
 
-    if outcome["report"] is None:
-        post_slack.invoke({"thread_id": thread_id,
-                           "text": f":warning: звіт не завершено: {outcome['error']}"})
-        return
+        if outcome["report"] is None:
+            post_slack.invoke({"thread_id": thread_id,
+                               "text": f":warning: звіт не завершено: {outcome['error']}"})
+            return
 
-    # Звіт уже в треді — дописуємо його на місці, а не додаємо нових повідомлень:
-    # вердикт критика і виправлення після нього це той самий звіт у кращій редакції.
-    reference = published.get("reference")
-    if reference:
-        edit_message(reference, render_report(outcome))
-    if outcome["revisions"]:
-        # звіт уже в пам'яті; після доопрацювання дописуємо лише що змінилось,
-        # інакше в контексті треда лежали б дві майже однакові копії
-        _remember_note(thread_id,
-                       f"Звіт уточнено після критики: {outcome['report'].hypothesis}")
+        # Звіт уже в треді — дописуємо його на місці, а не додаємо нових повідомлень:
+        # вердикт критика і виправлення після нього це той самий звіт у кращій редакції.
+        reference = published.get("reference")
+        if reference:
+            edit_message(reference, render_report(outcome))
+        if outcome["revisions"]:
+            # звіт уже в пам'яті; після доопрацювання дописуємо лише що змінилось,
+            # інакше в контексті треда лежали б дві майже однакові копії
+            _remember_note(thread_id,
+                           f"Звіт уточнено після критики: {outcome['report'].hypothesis}")
     _annotate(_service_from(summary), outcome["report"].hypothesis)
 
 
@@ -134,17 +142,19 @@ def _remember_investigation(thread_id: str, question: str, report: str) -> None:
     і згадка в тому ж треді приходить у контекст, де нічого не відбувалось: агент
     чесно відповідає, що не розуміє, про що йдеться. Тому дописуємо стан явно.
     """
-    supervisor.update_state(
-        {"configurable": {"thread_id": thread_id}},
-        {"messages": [{"role": "user", "content": question},
-                      {"role": "assistant", "content": report}],
-         "intent": "ALERT", "service": _service_from(question)})
+    with thread_lock(thread_id):
+        supervisor.update_state(
+            {"configurable": {"thread_id": thread_id}},
+            {"messages": [{"role": "user", "content": question},
+                          {"role": "assistant", "content": report}],
+             "intent": "ALERT", "service": _service_from(question)})
 
 
 def _remember_note(thread_id: str, note: str) -> None:
     """Дописує коротку примітку в пам'ять треда."""
-    supervisor.update_state({"configurable": {"thread_id": thread_id}},
-                            {"messages": [{"role": "assistant", "content": note}]})
+    with thread_lock(thread_id):
+        supervisor.update_state({"configurable": {"thread_id": thread_id}},
+                                {"messages": [{"role": "assistant", "content": note}]})
 
 
 def _service_from(summary: str) -> str:

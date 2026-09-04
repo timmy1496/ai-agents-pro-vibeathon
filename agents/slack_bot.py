@@ -16,6 +16,7 @@ import re
 from agents.config import SLACK_APP_TOKEN, SLACK_BOT_TOKEN
 from agents.observability import trace_config
 from agents.supervisor import build_supervisor
+from agents.threadlock import thread_lock
 from agents.tools import slack
 
 log = logging.getLogger(__name__)
@@ -50,8 +51,11 @@ def handle_event(event: dict, supervisor, post) -> str | None:
     conversation_id = slack.incident_for_thread(thread_ts) or thread_ts
 
     post(channel=channel, thread_ts=thread_ts, text=THINKING)
-    state = supervisor.invoke({"messages": [{"role": "user", "content": question}]},
-                              config=trace_config(conversation_id, tags=["slack"]))
+    # Лок береться після THINKING: якщо в треді ще йде розслідування, згадка чекає
+    # на звіт замість того, щоб відповісти з порожнім контекстом і затерти його.
+    with thread_lock(conversation_id):
+        state = supervisor.invoke({"messages": [{"role": "user", "content": question}]},
+                                  config=trace_config(conversation_id, tags=["slack"]))
     answer = state["messages"][-1].content
     post(channel=channel, thread_ts=thread_ts, text=answer)
     return answer
