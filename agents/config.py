@@ -18,6 +18,18 @@ GRAFANA_URL = os.getenv("GRAFANA_URL", "http://localhost:3000")
 GRAFANA_AUTH = os.getenv("GRAFANA_AUTH", "admin:admin")
 ALERTMANAGER_URL = os.getenv("ALERTMANAGER_URL", "http://localhost:9093")
 
+# GRAFANA_URL — голий URL; креденшели окремо, бо їх шлють заголовком Authorization,
+# а не в самому URL. scripts/incident.sh раніше очікував тут http://admin:admin@... —
+# те саме ім'я змінної означало два різні формати, і один із двох завжди ламався.
+# Тепер скрипт складає свій URL сам з GRAFANA_URL + GRAFANA_AUTH.
+
+# Спільний секрет HTTP-входу. Вебхук Alertmanager і, головне, /approve — це кнопка HITL:
+# без токена будь-хто в мережі стенду «підтверджує» дію від імені чергового.
+# Дефолт демонстраційний і лежить у .env.example навмисно — щоб стенд піднімався з
+# коробки; для будь-чого, крім локального демо, змінна має бути задана явно.
+AGENT_TOKEN = os.getenv("AGENT_TOKEN", "sre-demo-token")
+AGENT_TOKEN_IS_DEFAULT = "AGENT_TOKEN" not in os.environ
+
 # Langfuse: ключі за замовчуванням — ті, що compose створює через LANGFUSE_INIT_*.
 LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "http://localhost:3001")
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "pk-lf-demo")
@@ -35,6 +47,14 @@ SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN", "")
 # доречність гумору залежить від того, кому зараз погано.
 JOKES_ENABLED = os.getenv("SRE_JOKES", "1") not in ("0", "false", "")
 KB_COLLECTION = os.getenv("KB_COLLECTION", "sre_kb")
+
+# Куди fastembed кладе ONNX-моделі. Дефолт бібліотеки — $TMPDIR/fastembed_cache, а це
+# на macOS тека, яку система періодично прибирає: 2 ГБ e5-large тихо зникають, і
+# наступний старт агента стоїть кілька хвилин, качаючи їх заново — зазвичай саме тоді,
+# коли цього найменше хочеться. Пінимо в стабільне місце (той самий шлях кешує CI).
+os.environ.setdefault("FASTEMBED_CACHE_PATH",
+                      str(pathlib.Path.home() / ".cache" / "fastembed"))
+FASTEMBED_CACHE = pathlib.Path(os.environ["FASTEMBED_CACHE_PATH"])
 
 # Локальні ONNX-моделі через fastembed: без API-викликів, працює офлайн.
 # e5-large (1024d, 2.24GB) а не MiniLM (384d, 0.22GB) — виміряно, не за відчуттям:

@@ -8,22 +8,17 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import urllib.request
 
 from langchain_core.tools import tool
 
 from agents.config import DATA_DIR, GRAFANA_AUTH, GRAFANA_URL
+from agents.guardrails import BLOCK_REASON, DESTRUCTIVE, is_destructive
 from agents.tools import slack
 
 SLACK_FILE = DATA_DIR / "slack_threads.json"
 
-# Аналог PreToolUse-хука: пропозиція з такою дією не доходить навіть до людини.
-DESTRUCTIVE = re.compile(
-    r"\b(kubectl\s+delete|drop\s+(table|database)|rm\s+-rf|truncate\s+table"
-    r"|delete\s+from|helm\s+uninstall|terraform\s+destroy|--force\s+--grace-period=0)\b",
-    re.IGNORECASE,
-)
+__all__ = ["DESTRUCTIVE", "create_annotation", "post_slack", "propose_action"]
 
 
 def _post(url: str, payload: dict, headers: dict) -> dict:
@@ -84,11 +79,15 @@ def propose_action(service: str, action: str, reason: str, command: str = "") ->
     """Пропонує дію людині. Агент її НЕ виконує — лише формулює і чекає підтвердження.
 
     action — що зробити словами ("відкотити на 1.4.2"), command — конкретна команда,
-    якщо вона є. Деструктивні команди відхиляються тут і до людини не доходять.
+    якщо вона є.
+
+    Деструктив відсікає DestructiveActionGuard ще до того, як цей код виконається —
+    у графі агента сюди деструктивна команда не доходить взагалі. Перевірка лишається
+    другим шаром: тул викликають і напряму (евали, /sre, майбутні інтеграції), а політика
+    не має залежати від того, хто саме його покликав.
     """
-    if command and DESTRUCTIVE.search(command):
-        return {"blocked": True, "reason": "деструктивна команда заборонена політикою",
-                "command": command}
+    if is_destructive({"command": command, "action": action}):
+        return {"blocked": True, "reason": BLOCK_REASON, "command": command}
     return {"status": "awaiting_human_approval", "service": service,
             "action": action, "reason": reason, "command": command}
 

@@ -4,11 +4,16 @@
 set -euo pipefail
 
 CHAOS="${CHAOS_URL:-http://localhost:8080}"
-GRAFANA="${GRAFANA_URL:-http://admin:admin@localhost:3000}"
+# GRAFANA_URL — голий URL (той самий формат, що й у agents/config.py), креденшели окремо
+# у GRAFANA_AUTH. Раніше скрипт очікував тут http://admin:admin@..., і одна змінна
+# означала два різні формати — з них один завжди був зламаний.
+GRAFANA="${GRAFANA_URL:-http://localhost:3000}"
+GRAFANA_AUTH="${GRAFANA_AUTH:-admin:admin}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 annotate() {
   curl -sf -X POST "$GRAFANA/api/annotations" \
+    -u "$GRAFANA_AUTH" \
     -H 'Content-Type: application/json' \
     -d "{\"text\":\"$1\",\"tags\":[\"deployment\",\"demo-chaos-svc\"]}" >/dev/null \
     && echo "grafana annotation: $1" || echo "warn: grafana annotation не створено"

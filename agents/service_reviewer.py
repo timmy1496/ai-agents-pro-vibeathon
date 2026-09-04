@@ -14,7 +14,7 @@ import re
 import yaml
 
 from agents.tools.catalog import get_service
-from agents.tools.observability import _fetch_logs
+from agents.tools.observability import _fetch_logs, _label
 from agents.tools.stand import get_alert_rules
 
 GOLDEN_SIGNALS = ("error_rate", "latency", "restarts", "saturation")
@@ -44,7 +44,7 @@ def check_logging(service: str, minutes: int = 60) -> dict:
     структуру запису — тобто саме те, що тут оцінюється. Context-Minimization захищає
     контекст моделі, а цей чекліст — детермінований Python, і йому потрібен оригінал.
     """
-    lines = _fetch_logs(f'{{service="{service}"}}', minutes, SAMPLE_SIZE)
+    lines = _fetch_logs(f'{{service="{_label(service)}"}}', minutes, SAMPLE_SIZE)
     if not lines:
         return {"section": "logging", "grade": "F", "score": 0.0,
                 "findings": ["логів за вікно немає — розслідувати інцидент буде нічим"]}
@@ -100,13 +100,20 @@ def check_alerts(service: str) -> dict:
     if without_for:
         findings.append(f"без for (спрацюють на одиничному викиді): {', '.join(without_for)}")
 
-    score = len(covered) / len(GOLDEN_SIGNALS) * (0.7 if without_runbook else 1.0)
+    # Штрафи мультиплікативні, і обидва реальні: алерт без runbook будить людину без
+    # інструкції, алерт без `for` будить її на одиничному викиді. Раніше without_for
+    # потрапляв у findings, але на бал не впливав — тобто ревізія його називала і тут
+    # же йому пробачала.
+    score = (len(covered) / len(GOLDEN_SIGNALS)
+             * (0.7 if without_runbook else 1.0)
+             * (0.8 if without_for else 1.0))
     return {"section": "alerts", "grade": _grade(score), "score": round(score, 2),
             "findings": findings, "missing_signals": missing}
 
 
 def propose_alert_rules(service: str, missing: list[str]) -> str:
     """Готовий YAML правил для відсутніх сигналів — з for, severity по tier і runbook."""
+    service = _label(service)
     card = get_service.invoke({"name": service})
     tier = card.get("tier", 3) if "error" not in card else 3
     runbook = card.get("runbook", "kb/runbooks/high-error-rate.md")

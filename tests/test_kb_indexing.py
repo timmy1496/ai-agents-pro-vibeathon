@@ -8,8 +8,9 @@
 def test_empty_collection_triggers_reindex(monkeypatch):
     from agents.kb import store
 
-    store.QDRANT_URL = ":memory:"
-    store._shared_client.cache_clear()
+    # QDRANT_URL і кеш клієнта вже виставлені autouse-фікстурою `_kb_offline`
+    # на всю сесію. Скидати кеш тут не можна: викинутий локальний QdrantClient
+    # помирає разом із процесом і валить його SIGABRT уже після зеленого сьюта.
     store.reindex()
 
     # імітуємо обірваний прогін: колекція є, точок немає
@@ -31,8 +32,6 @@ def test_empty_collection_triggers_reindex(monkeypatch):
 def test_existing_populated_collection_is_not_rebuilt(monkeypatch):
     from agents.kb import store
 
-    store.QDRANT_URL = ":memory:"
-    store._shared_client.cache_clear()
     store.reindex()
 
     calls = []
@@ -66,6 +65,4 @@ def test_client_holds_no_inference_state():
     """Клієнт став звичайним HTTP-клієнтом — саме тому він потокобезпечний."""
     from agents.kb import store
 
-    store.QDRANT_URL = ":memory:"
-    store._shared_client.cache_clear()
     assert store.client() is store.client(), "один клієнт на процес"

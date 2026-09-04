@@ -47,6 +47,11 @@ def log(level: str, msg: str, **kw) -> None:
     }), flush=True)
 
 
+# /metrics і /healthz б'ють раз на 5 секунд кожен і не несуть жодної інформації про
+# інцидент — логувати їх означає втопити корисні рядки у власному шумі.
+QUIET_PATHS = ("/metrics", "/healthz")
+
+
 @app.middleware("http")
 async def instrument(request: Request, call_next):
     started = time.perf_counter()
@@ -56,8 +61,17 @@ async def instrument(request: Request, call_next):
     path = request.url.path if request.url.path in ("/", "/healthz", "/metrics") else "/other"
     REQUESTS.labels(request.method, path, str(response.status_code)).inc()
     LATENCY.labels(path).observe(elapsed)
+
     if response.status_code >= 500:
         log("error", "request failed", path=path, status=response.status_code,
+            duration_ms=round(elapsed * 1000, 1), trace_id=trace_id)
+    elif path not in QUIET_PATHS:
+        # Успішні запити теж логуються, і це не косметика. Раніше здоровий сервіс не
+        # писав у stdout НІЧОГО: у Loki не існувало навіть стріму demo-chaos-svc, тому
+        # ревізія A3 ставила здоровому сервісу F («логів за вікно немає»), а панель логів
+        # на дашборді була порожня до першого інциденту. Це той самий клас розбіжності
+        # «світ тестів vs світ стенду», що й із сервіс-агностичними правилами алертів.
+        log("info", "request", path=path, status=response.status_code,
             duration_ms=round(elapsed * 1000, 1), trace_id=trace_id)
     return response
 

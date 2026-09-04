@@ -1,46 +1,204 @@
-"""LLM-judge: якісна оцінка звіту. Бігає на реліз, не на кожен коміт.
+"""LLM-суддя: якісна оцінка звіту за рубрикою. Бігає на реліз, не на кожен коміт.
 
-Дешева модель — суддя не міркує, а звіряє звіт з еталоном і виводами тулів.
+Три рішення, кожне з них — вибір, а не замовчування.
+
+**Один виклик на вимір, а не один виклик на весь звіт.** Спокуса зекономити токенів,
+згодувавши судді всі п'ять шкал одразу, коштує точності: у батчі виміри тягнуть один
+одного (слабка обґрунтованість тягне вниз і корисність дій, хоча це різні речі).
+
+**Rationale перед score.** Порядок ключів у відповіді зафіксовано у промпті й
+перевіряється тут: оцінка, ВИВЕДЕНА з міркування, точніша за оцінку, обґрунтовану
+після. Це різні речі, і різниця вимірна.
+
+**n/a — не нуль.** Вимір без знаменника (кейс на відмову не має рекомендованих дій)
+віддає {"na": "..."} і НЕ всереднюється. Інакше правильна поведінка агента карається:
+чесна відмова опускала б середню actionability так само, як безпорадний звіт.
+Структурний n/a (оголошений у eval.toml) навіть не витрачає виклик судді.
 """
 from __future__ import annotations
 
-from typing import Literal
+import json
+from typing import Any
 
-from pydantic import BaseModel, Field
-
-from agents.config import CHEAP_MODEL
-
-Score = Literal[1, 2, 3, 4, 5]
+from evals import config
 
 
-class JudgeVerdict(BaseModel):
-    correctness: Score = Field(description="Чи правильна корене­ва причина і чи узгоджена з доказами")
-    groundedness: Score = Field(description="Чи кожен факт звіту спирається на вивід тула")
-    actionability: Score = Field(description="Чи можна за рекомендаціями діяти без додаткових питань")
-    reason: str = Field(description="Одне-два речення: що саме знизило оцінку")
+class Unscored:
+    """Вимір, який не вдалося виміряти. Це НЕ n/a і НЕ нуль.
+
+    n/a означає «знаменника немає» — правильний стан. Unscored означає «знаменник є,
+    але інструмент зламався»: суддя відповів прозою замість JSON, обірвався виклик.
+    Плутати їх не можна в жодну сторону: як нуль це занизило б оцінку агента, як n/a —
+    сховало б поломку вимірювання за чистою метрикою.
+    """
+
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def __repr__(self) -> str:
+        return f"unscored({self.reason})"
+
+    def as_dict(self) -> dict:
+        return {"error": self.reason}
 
 
-JUDGE_PROMPT = """Ти оцінюєш звіт RCA за трьома шкалами 1-5.
+class NotApplicable:
+    """Вимір без знаменника. Окремий тип, щоб його не можна було випадково скласти з 0."""
 
-correctness: клас причини правильний і випливає з доказів. Чесне "unknown" при браку
-доказів — це 5, а вгадана причина без доказів — 1, навіть якщо вгадано правильно.
-groundedness: кожен факт має посилання на конкретний PromQL/LogQL/шлях у KB. Факт без
-джерела — максимум 2.
-actionability: дії конкретні, з runbook, у правильному порядку. "Розібратись у проблемі" — 1.
+    __slots__ = ("reason", "structural")
 
-Суди строго. Оцінка 5 означає "я б це відправив у прод-канал без правок"."""
+    def __init__(self, reason: str, structural: bool = False) -> None:
+        self.reason = reason
+        self.structural = structural
+
+    def __repr__(self) -> str:
+        return f"n/a({self.reason})"
+
+    def as_dict(self) -> dict:
+        return {"na": self.reason, "structural": self.structural}
 
 
-def judge(case: dict, report, tool_log: str, model: str = CHEAP_MODEL) -> JudgeVerdict:
+class Score:
+    """Оцінка виміру разом з міркуванням, з якого вона виведена.
+
+    `spread` — різниця між найбільшою і найменшою вибіркою, коли вимір семплюється.
+    Вона потрапляє у звіт навмисно: широкий розкид означає, що самому числу вірити
+    не варто, і це має бути видно поруч із числом, а не в чиїйсь пам'яті.
+    """
+
+    __slots__ = ("value", "rationale", "samples", "spread")
+
+    def __init__(self, value: float, rationale: str,
+                 samples: int = 1, spread: float = 0.0) -> None:
+        self.value = value
+        self.rationale = rationale
+        self.samples = samples
+        self.spread = spread
+
+    def __repr__(self) -> str:
+        return f"{self.value:.2f}"
+
+    def as_dict(self) -> dict:
+        scored = {"score": round(self.value, 3), "rationale": self.rationale}
+        if self.samples > 1:
+            scored["samples"] = self.samples
+            scored["spread"] = round(self.spread, 3)
+        return scored
+
+
+def _artifacts(case: dict, report: Any, tool_log: str) -> str:
+    limit = config.load()["judge"]["max_chars"]
+    body = (
+        f"ВХІД: {case['input']}\n"
+        f"СЕРВІС: {case['service']}\n"
+        f"ЕТАЛОННИЙ КЛАС ПРИЧИНИ: {case.get('expected_root_cause', '—')}\n"
+        f"ОЧІКУВАНІ ТУЛИ: {case.get('expect_tools', [])}\n\n"
+        f"ЗВІТ АГЕНТА:\n{report.model_dump_json(indent=2) if report else '(звіту немає)'}\n\n"
+        f"ЛОГ ІНСТРУМЕНТІВ:\n{tool_log}"
+    )
+    if len(body) <= limit:
+        return body
+    # Обрізання гучне: суддя має знати, що судить неповний артефакт, інакше він
+    # порахує відсутність доказу за його відсутність, а не за обрізання.
+    return body[:limit] + f"\n\n[ОБРІЗАНО: артефакт довший за {limit} символів]"
+
+
+def _parse(raw: str, dimension: str) -> Score | NotApplicable:
+    """Розбір відповіді судді. Порядок ключів — частина контракту, тому перевіряється."""
+    if "{" not in raw or "}" not in raw:
+        raise ValueError(f"{dimension}: суддя відповів без JSON: {raw[:300]!r}")
+    payload = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+    keys = list(payload)
+    if keys[:1] != ["rationale"]:
+        raise ValueError(f"{dimension}: rationale має йти першим, отримано {keys}")
+
+    score = payload["score"]
+    if isinstance(score, dict) and "na" in score:
+        return NotApplicable(str(score["na"]))
+    value = float(score)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{dimension}: оцінка {value} поза 0.0-1.0")
+    return Score(value, str(payload["rationale"]))
+
+
+REMINDER = ('\n\n[СИСТЕМА] Попередня відповідь була не за контрактом. Поверни РІВНО '
+            'один JSON-об\'єкт {"rationale": …, "score": …} і нічого крім нього: '
+            'без markdown, без заголовків, без тексту поза JSON.')
+
+
+def score_dimension(name: str, case: dict, report: Any, tool_log: str,
+                    model: str | None = None) -> Score | NotApplicable | Unscored:
+    """Один вимір — один виклик судді, з однією повторною спробою на порушення контракту.
+
+    Суддя час від часу відповідає прозою з markdown-заголовками замість JSON. Без
+    ретраю це коштувало цілого кейса: агент відпрацював, звіт є, а рядок прогону
+    втрачався на кроці вимірювання.
+    """
+    if not config.applicable(name, case):
+        return NotApplicable(f"вимір не застосовний до кейса виду {case.get('kind')}",
+                             structural=True)
+
     from agents.models import resolve
 
-    grader = resolve(model).with_structured_output(JudgeVerdict)
-    return grader.invoke([
-        {"role": "system", "content": JUDGE_PROMPT},
-        {"role": "user", "content":
-            f"ВХІД: {case['input']}\n"
-            f"ЕТАЛОННИЙ КЛАС ПРИЧИНИ: {case['expected_root_cause']}\n"
-            f"ОЧІКУВАНІ ТУЛИ: {case.get('expect_tools', [])}\n\n"
-            f"ЗВІТ АГЕНТА:\n{report.model_dump_json(indent=2)}\n\n"
-            f"ВИВОДИ ІНСТРУМЕНТІВ:\n{tool_log[:8000]}"},
-    ])
+    grader = resolve(model or config.judge_model())
+    system = f"{config.system_prompt()}\n\n---\n\n{config.dimension_prompt(name)}"
+    artifacts = _artifacts(case, report, tool_log)
+
+    def one_sample() -> Score | NotApplicable | Unscored:
+        for attempt_text in (artifacts, artifacts + REMINDER):
+            answer = grader.invoke([{"role": "system", "content": system},
+                                    {"role": "user", "content": attempt_text}])
+            try:
+                return _parse(str(answer.content), name)
+            except (ValueError, json.JSONDecodeError) as error:
+                last = error
+        return Unscored(f"суддя двічі відповів не за контрактом: {last}"[:300])
+
+    wanted = config.samples(name)
+    if wanted == 1:
+        return one_sample()
+
+    # Медіана, а не середнє: одна викидна вибірка не має тягнути результат за собою,
+    # а саме одиничний викид тут і є проблемою.
+    drawn = [one_sample() for _ in range(wanted)]
+    scores = [s for s in drawn if isinstance(s, Score)]
+    if not scores:
+        return next((s for s in drawn if isinstance(s, NotApplicable)), drawn[0])
+
+    values = sorted(s.value for s in scores)
+    median = values[len(values) // 2]
+    chosen = min(scores, key=lambda s: abs(s.value - median))
+    return Score(median, chosen.rationale, samples=len(scores),
+                 spread=values[-1] - values[0])
+
+
+def judge(case: dict, report: Any, tool_log: str,
+          model: str | None = None) -> dict[str, dict]:
+    """Усі застосовні виміри кейса. Гард рубрики — перед першим витраченим токеном.
+
+    Збій одного виміру не забирає інші й не забирає кейс: агент свою роботу вже зробив,
+    і детерміновані метрики по ньому лишаються дійсними.
+    """
+    config.check_rubric_integrity()
+    scores = {}
+    for name in config.dimensions():
+        try:
+            scores[name] = score_dimension(name, case, report, tool_log, model).as_dict()
+        except Exception as error:  # noqa: BLE001 — обрив виклику теж не має валити кейс
+            scores[name] = Unscored(f"{type(error).__name__}: {error}"[:300]).as_dict()
+    return scores
+
+
+def unscored(rows: list[dict]) -> int:
+    """Скільки вимірів не вдалося виміряти. Нуль у знаменнику надійності прогону."""
+    return sum(1 for r in rows for entry in (r.get("judge") or {}).values()
+               if "error" in entry)
+
+
+def average(rows: list[dict], dimension: str) -> float | None:
+    """Середнє по виміру. n/a не входять у знаменник — саме в цьому їхній сенс."""
+    values = [r["judge"][dimension]["score"] for r in rows
+              if "judge" in r and "score" in r["judge"].get(dimension, {})]
+    return round(sum(values) / len(values), 3) if values else None

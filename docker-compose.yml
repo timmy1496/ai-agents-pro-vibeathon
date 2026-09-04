@@ -1,5 +1,10 @@
 name: sre-agent-stand
 
+# Healthcheck є на кожному сервісі, від якого щось залежить, і depends_on чекає саме
+# service_healthy. Причина прозаїчна: `make up && make incident-1` повертався раніше,
+# ніж Prometheus устигав прочитати правила, і перший алерт на демо не спрацьовував
+# без жодної видимої причини. Порядок старту — це не деталь, коли на нього дивляться.
+
 services:
   prometheus:
     image: prom/prometheus:v3.1.0
@@ -10,6 +15,10 @@ services:
     volumes:
       - ./infra/prometheus:/etc/prometheus:ro
     ports: ["9090:9090"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 5s
+      retries: 20
 
   alertmanager:
     image: prom/alertmanager:v0.28.0
@@ -17,6 +26,10 @@ services:
       - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports: ["9093:9093"]
     extra_hosts: ["host.docker.internal:host-gateway"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/ready"]
+      interval: 5s
+      retries: 20
 
   loki:
     image: grafana/loki:3.3.2
@@ -24,6 +37,10 @@ services:
     volumes:
       - ./infra/loki/loki.yml:/etc/loki/loki.yml:ro
     ports: ["3100:3100"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 5s
+      retries: 30
 
   promtail:
     image: grafana/promtail:3.3.2
@@ -31,7 +48,8 @@ services:
     volumes:
       - ./infra/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    depends_on: [loki]
+    depends_on:
+      loki: {condition: service_healthy}
 
   grafana:
     image: grafana/grafana:11.5.1
@@ -46,13 +64,24 @@ services:
       # при кожному перестворенні контейнера, а на демо це головна вертикальна лінія
       - grafana-data:/var/lib/grafana
     ports: ["3000:3000"]
-    depends_on: [prometheus, loki]
+    depends_on:
+      prometheus: {condition: service_healthy}
+      loki: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 5s
+      retries: 20
 
   qdrant:
     # версія навмисно збігається з qdrant-client у requirements.txt: при розбіжності
     # major/minor сервер не розуміє inference-обʼєкти клієнта і віддає 500
     image: qdrant/qdrant:v1.19.0
     ports: ["6333:6333"]
+    healthcheck:
+      # у образі qdrant немає ні curl, ні wget — лишається сам бінарник
+      test: ["CMD", "/qdrant/qdrant", "--version"]
+      interval: 5s
+      retries: 10
 
   chaos-svc:
     build: ./services/chaos-svc
@@ -64,11 +93,18 @@ services:
     mem_limit: 256m
     restart: unless-stopped
     ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      retries: 15
 
   podinfo-a:
     image: stefanprodan/podinfo:6.7.1
     labels:
       sre.service: podinfo-a
+    # ENTRYPOINT в образі немає, тому бінарник називаємо явно — інакше "--port=9898"
+    # стає ім'ям команди і контейнер не стартує
     command: ["./podinfo", "--port=9898"]
 
   podinfo-b:
@@ -83,7 +119,8 @@ services:
     volumes:
       - ./scripts/load.js:/scripts/load.js:ro
     restart: unless-stopped
-    depends_on: [chaos-svc]
+    depends_on:
+      chaos-svc: {condition: service_healthy}
 
   # Langfuse v3 self-host. Так, це шість контейнерів замість одного — але SDK v2,
   # який ходить у легкий сервер v2, написаний під langchain 0.x і з LangChain 1.x

@@ -53,9 +53,6 @@ class SupervisorState(MessagesState):
     service: str
 
 
-NOT_IMPLEMENTED: dict[str, str] = {}
-
-
 def _last_user_text(state: SupervisorState) -> str:
     return next(str(m.content) for m in reversed(state["messages"]) if m.type == "human")
 

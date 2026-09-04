@@ -7,26 +7,60 @@ from __future__ import annotations
 
 import html
 import json
+import logging
+import secrets
 
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from agents.config import AGENT_TOKEN, AGENT_TOKEN_IS_DEFAULT
 from agents.observability import trace_config
 from agents.config import DATA_DIR
 from agents.supervisor import build_supervisor
 from agents.tools.actions import SLACK_FILE, create_annotation, edit_message, post_slack
 
+log = logging.getLogger(__name__)
 PROCESSED = DATA_DIR / "processed_alerts.json"
 
 app = FastAPI(title="SRE Agent")
 supervisor = build_supervisor()  # один checkpointer на процес: треди живуть між запитами
 
 
+def require_token(authorization: str = Header(default="")) -> None:
+    """Спільний секрет на всіх POST-ручках.
+
+    Найважливіша з них — /approve: це кнопка HITL, і без неї «підтвердити дію на
+    tier-1» міг будь-хто, хто дотягнувся до порту. compare_digest, а не ==, щоб
+    порівняння не текло по часу.
+    """
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(token, AGENT_TOKEN):
+        raise HTTPException(status_code=401, detail="потрібен Authorization: Bearer <AGENT_TOKEN>")
+
+
+if AGENT_TOKEN_IS_DEFAULT:
+    log.warning("AGENT_TOKEN не заданий — діє демонстраційний дефолт. "
+                "Для будь-чого, крім локального стенду, задай його явно.")
+
+
 def _handle(text: str, thread_id: str) -> str:
-    state = supervisor.invoke({"messages": [{"role": "user", "content": text}]},
-                              config=trace_config(thread_id, tags=["sre-agent"]))
-    answer = state["messages"][-1].content
+    """Один прохід супервізора з відповіддю в тред.
+
+    Помилка теж іде в тред, і це не косметика: розслідування бігає у фоні
+    (див. вебхук), тому виняток тут нікому повернути — HTTP-відповідь Alertmanager
+    отримав кілька десятків секунд тому. Без цього блоку скінчений ключ або
+    недоступний провайдер виглядають як тред, у якому агент просто мовчить,
+    а справжня причина лишається в stderr процесу.
+    """
+    try:
+        state = supervisor.invoke({"messages": [{"role": "user", "content": text}]},
+                                  config=trace_config(thread_id, tags=["sre-agent"]))
+        answer = str(state["messages"][-1].content)
+    except Exception as error:
+        log.exception("розслідування у треді %s не завершилось", thread_id)
+        answer = (f":warning: Розслідування не завершилось: {type(error).__name__}: {error}\n"
+                  f"Алерт лишається відкритим — розбирає людина.")
     post_slack.invoke({"thread_id": thread_id, "text": answer})
     return answer
 
@@ -56,9 +90,23 @@ def _investigate_and_post(summary: str, thread_id: str) -> None:
         # ніж критик закінчить. У тому вікні контекст мусить уже бути.
         _remember_investigation(thread_id, summary, rendered)
 
-    outcome = investigate({"summary": summary, "service": _service_from(summary)},
-                          config=trace_config(thread_id, tags=["sre-agent"]),
-                          on_report=publish)
+    try:
+        outcome = investigate({"summary": summary, "service": _service_from(summary)},
+                              config=trace_config(thread_id, tags=["sre-agent"]),
+                              on_report=publish)
+    except Exception as error:
+        # Розслідування бігає у фоні, тому виняток тут нікому повернути: HTTP-відповідь
+        # Alertmanager отримав кілька десятків секунд тому. Без цього блоку скінчений
+        # ключ, недоступний провайдер або впала залежність виглядають однаково — як тред,
+        # у якому черговий чекає на відповідь, якої вже не буде, а причина лишається
+        # в stderr процесу.
+        log.exception("розслідування у треді %s не завершилось", thread_id)
+        post_slack.invoke({
+            "thread_id": thread_id,
+            "text": f":warning: Розслідування не завершилось: "
+                    f"{type(error).__name__}: {error}\n"
+                    f"Алерт лишається відкритим — розбирає людина."})
+        return
 
     if outcome["report"] is None:
         post_slack.invoke({"thread_id": thread_id,
@@ -115,7 +163,7 @@ def _process_alert(summary: str, thread_id: str) -> None:
     _investigate_and_post(summary, thread_id)
 
 
-@app.post("/webhook/alert")
+@app.post("/webhook/alert", dependencies=[Depends(require_token)])
 async def alertmanager_webhook(payload: dict, background: BackgroundTasks) -> dict:
     """Вхід від Alertmanager. Відповідаємо одразу — розслідування йде у фоні.
 
@@ -182,7 +230,7 @@ class Command(BaseModel):
     thread_id: str = "manual"
 
 
-@app.post("/sre")
+@app.post("/sre", dependencies=[Depends(require_token)])
 async def sre_command(command: Command) -> dict:
     """Емуляція слеш-команди / згадки в треді."""
     return {"thread_id": command.thread_id, "answer": _handle(command.text, command.thread_id)}
@@ -194,17 +242,43 @@ class Approval(BaseModel):
     note: str = ""
 
 
-@app.post("/approve")
+@app.post("/approve", dependencies=[Depends(require_token)])
 async def approve(approval: Approval) -> dict:
-    """Кнопка «підтвердити» під пропозицією дії.
+    """Кнопка «підтвердити» під пропозицією дії — і продовження перерваного графа.
 
-    Рішення фіксується у треді. Саму зміну в інфраструктурі агент не виконує ніколи —
-    підтвердження означає «людина прийняла рекомендацію», а не «агенту дозволено діяти».
+    Раніше ця ручка лише писала в тред, а interrupt висів у checkpointer назавжди:
+    петля HITL виглядала замкненою, але не була. Тепер рішення повертається в граф
+    (`Command(resume=...)`), і агент доводить крок до кінця.
+
+    Саму зміну в інфраструктурі агент не виконує ніколи: підтвердження означає «людина
+    прийняла рекомендацію», а не «агенту дозволено діяти» — propose_action і після
+    approve повертає пропозицію, а не результат виконання.
     """
+    from agents.incident_agent import resume
+
+    decision = "approve" if approval.approved else "reject"
     verdict = "підтверджено" if approval.approved else "відхилено"
     post_slack.invoke({"thread_id": approval.thread_id,
                        "text": f":white_check_mark: Людина: дію {verdict}. {approval.note}".strip()})
-    return {"thread_id": approval.thread_id, "decision": verdict}
+
+    try:
+        state = resume(decision, approval.note,
+                       config=trace_config(approval.thread_id, tags=["hitl"]))
+    except Exception as error:
+        log.exception("продовження треда %s не вдалось", approval.thread_id)
+        post_slack.invoke({"thread_id": approval.thread_id,
+                           "text": f":warning: Рішення записано, але агент не зміг "
+                                   f"продовжити: {type(error).__name__}: {error}"})
+        return {"thread_id": approval.thread_id, "decision": verdict, "resumed": False}
+
+    if state is None:  # у треді нічого не висіло — рішення просто зафіксовано
+        return {"thread_id": approval.thread_id, "decision": verdict, "resumed": False}
+
+    answer = state["messages"][-1].content
+    if answer:
+        post_slack.invoke({"thread_id": approval.thread_id, "text": str(answer)})
+    return {"thread_id": approval.thread_id, "decision": verdict, "resumed": True,
+            "answer": answer}
 
 
 @app.get("/", response_class=HTMLResponse)

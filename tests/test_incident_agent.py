@@ -130,6 +130,27 @@ def test_prompt_states_the_non_negotiables():
     assert "propose_action" in SYSTEM_PROMPT
 
 
+def test_prompt_demands_executable_actions_not_intentions():
+    """Промах, який показав перший повний прогін: correctness 0.96, actionability 0.48.
+
+    Агент майже завжди правильно називав причину і підкріплював її доказами — і майже
+    ніколи не доводив справу до дій: «розглянути відкат», «виконати кроки з runbook»,
+    «перевірити логи». Промпт вимагав брати дії з runbook, але не вимагав, щоб їх можна
+    було виконати.
+    """
+    from agents.incident_agent import SYSTEM_PROMPT
+
+    # Промпт перенесений по рядках, тому порівнюємо на згорнутих пробілах.
+    flat = " ".join(SYSTEM_PROMPT.split())
+
+    assert "recommended_actions" in flat
+    assert "не ставлячи жодного уточнювального питання" in flat, \
+        "критерій виконуваності має бути в промпті явним"
+    for anti_pattern in ("розглянути відкат", "перевірити логи", "виконати кроки з runbook"):
+        assert anti_pattern in flat, (
+            f"промпт має назвати намір-заглушку {anti_pattern!r} прямо: загальне "
+            f"«будь конкретним» модель ігнорує")
+
 def test_agent_cannot_post_to_slack_itself():
     """Куди писати — рішення оркестрації: лише вона знає тред поточного інциденту.
 

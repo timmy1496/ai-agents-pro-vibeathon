@@ -4,7 +4,10 @@
   1. тули кейса виконуються на його записаних виводах;
   2. кейс розв'язний — у доказах є те, що відрізняє його клас причини;
   3. політика тримається: деструктив блокується, дії йдуть через людину.
-Якість самих формулювань — робота LLM-judge, він у test_eval_online.py.
+
+Якість самих формулювань — робота LLM-судді (`make eval-online`), і це навмисно
+окремий, дорожчий і рідший прогін. Контракт вимірювального інструмента — ще один
+файл, tests/test_eval_contract.py.
 """
 import pytest
 
@@ -104,10 +107,77 @@ def test_policy_cases(case):
         assert result["status"] == "awaiting_human_approval"
 
 
-def test_dataset_shape():
-    """Датасет має покривати всі класи причин і містити кейси на відмову."""
-    all_cases = cases.load()
-    labels = {c["expected_root_cause"] for c in all_cases if c["kind"] == "rca"}
-    assert labels >= {"release", "dependency", "resources", "config", "capacity", "unknown"}
-    assert len(all_cases) >= 20, f"у датасеті лише {len(all_cases)} кейсів"
-    assert sum(1 for c in all_cases if c.get("must_escalate") or c.get("must_refuse")) >= 3
+# Форма датасету перевіряється у tests/test_eval_contract.py — вимоги оголошені
+# в evals/eval.toml, щоб планка піднімалась правкою даних, а не коду.
+
+
+def test_saturation_word_without_load_growth_is_not_capacity():
+    """Коротка дорога, якою хибна мітка проходила повз гейт.
+
+    cap-02 мав рівний трафік (88 -> 90) і мітку "capacity"; класифікатор бачив слово
+    "cache" у патерні й погоджувався з міткою — з хибної причини. Тому кейс, який
+    карав агента за правильну відповідь, проходив test_case_is_solvable_from_its_own_evidence.
+    """
+    flat = {
+        "signals": {"rps": {"current_avg": 90.0, "baseline_avg": 88.0}},
+        "patterns": [{"pattern": "cache miss for cart draft key", "count": 400}],
+        "deploys": [], "k8s_events": [],
+    }
+    assert runner.classify(flat) != "capacity"
+
+    under_load = {**flat, "signals": {"rps": {"current_avg": 280.0, "baseline_avg": 88.0}}}
+    assert runner.classify(under_load) == "capacity", \
+        "та сама ознака ПІД навантаженням — вже насичення"
+
+
+def test_the_critic_metric_is_named_for_what_it_measures():
+    """`grounded_rate` міряв ВЕРДИКТ КРИТИКА, а називався так, ніби міряє звіт.
+
+    Різниця перестала бути академічною на прогоні 2026-09-04: критик відхилив два
+    звіти, спаливши по два оберти, а незалежний суддя дав тим самим звітам
+    groundedness 0.85 і 1.0. Поки метрика називалась grounded_rate, червоний гейт
+    читався як «агент вигадує», хоча насправді шумів критик.
+    """
+    from evals import config, run
+
+    assert "min_critic_accept_rate" in config.gate()
+    assert "min_grounded_rate" not in config.gate(), "стара назва не має лишатись"
+
+    rows = [{"root_cause_match": True, "missing_tools": [], "revisions": 0,
+             "critic_accepted": accepted, "fallback_synthesis": False}
+            for accepted in (True, True, False, True)]
+    summary = run.summarise(rows)
+    assert summary["critic_accept_rate"] == 0.75
+    assert "grounded_rate" not in summary
+
+
+def test_a_composite_tool_counts_as_the_tools_it_covers():
+    """Датасет описує, які ДОКАЗИ потрібні кейсу, а не якими викликами вони приїхали.
+
+    `incident_snapshot` віддає за один виклик те, що раніше збиралося чотирма. Поки
+    рахувались імена, агент після цієї оптимізації показував tool_recall 0.0 при
+    правильній відповіді — тобто метрика карала за те, що робота стала дешевшою.
+    """
+    covered = runner.covered_tools(["incident_snapshot"])
+    assert {"get_service", "golden_signals", "query_loki_patterns", "get_deploys",
+            "k8s_events"} <= covered
+    assert runner.covered_tools(["get_service"]) == {"get_service"}, \
+        "звичайний тул покриває тільки себе"
+
+
+def test_the_declared_composition_matches_what_the_tool_returns(monkeypatch):
+    """Додали джерело в композит і забули оголосити — евал почне тихо недораховувати."""
+    from agents.tools import observability
+    from agents.tools.observability import COMPOSES, incident_snapshot
+
+    from tests import fixtures
+
+    monkeypatch.setattr(observability, "_get",
+                        lambda url, params: fixtures.loki_lines(["{}"]) if "/loki/" in url
+                        else fixtures.prom_range([1.0]))
+    monkeypatch.setattr("agents.tools.stand._recent", lambda *a, **k: [])
+
+    snapshot = incident_snapshot.invoke({"service": "demo-chaos-svc"})
+    assert len(snapshot) == len(COMPOSES["incident_snapshot"]), (
+        f"композит віддає {len(snapshot)} секцій, а оголошено покриття "
+        f"{len(COMPOSES['incident_snapshot'])} тулів — списки розійшлись")

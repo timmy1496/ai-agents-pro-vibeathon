@@ -38,12 +38,31 @@ def _has_recent_deploy(evidence: dict) -> bool:
     return any(d["minutes_ago"] <= DEPLOY_WINDOW_MINUTES for d in evidence["deploys"])
 
 
+# Наскільки має вирости трафік, щоб слово про насичення означало саме capacity.
+# Нижче за це "cache"/"pool"/"queue" у логах однаково добре пояснюються залежністю.
+LOAD_PRESSURE = 1.5
+
+
 def _has_saturation(evidence: dict) -> bool:
+    """Насичення = сплеск трафіку, або ознака насичення ПІД навантаженням.
+
+    Раніше достатньо було слова зі SATURATION_WORDS у топ-3 патернах — і саме ця
+    коротка дорога сховала хибно розмічений кейс: cap-02 мав рівний трафік (88 -> 90)
+    і мітку "capacity", класифікатор бачив "cache" у логах і погоджувався з міткою,
+    тому test_case_is_solvable_from_its_own_evidence мовчав. Агент відповідав
+    "dependency" — правильно — і отримував MISS.
+
+    Слово про насичення без жодного росту навантаження не є ознакою capacity:
+    масові cache miss при рівному трафіку — це поведінка залежності.
+    """
     rps = evidence["signals"]["rps"]
-    spike = (rps["current_avg"] or 0) >= 3 * (rps["baseline_avg"] or 1e9)
+    current, baseline = rps["current_avg"] or 0, rps["baseline_avg"]
+    ratio = current / baseline if baseline else 0
+    if ratio >= 3:
+        return True
     pattern = any(word in p["pattern"].lower()
                   for p in evidence["patterns"][:3] for word in SATURATION_WORDS)
-    return spike or pattern
+    return pattern and ratio >= LOAD_PRESSURE
 
 
 # Порядок = специфічність сигналу. OOM іде перед деплоєм свідомо: leak, що приїхав
@@ -98,6 +117,22 @@ def is_solvable(case: dict, evidence: dict) -> bool:
     return classify(evidence) in _acceptable(case)
 
 
+def covered_tools(called: list[str]) -> set[str]:
+    """Які тули фактично покриті — з урахуванням композитів.
+
+    `incident_snapshot` віддає за один виклик те, що раніше збиралося чотирма. Якщо
+    рахувати самі імена, агент, який зібрав ті самі дані дешевше, виглядає гіршим за
+    того, хто зробив чотири виклики. Датасет описує, які ДОКАЗИ потрібні кейсу, а
+    якими викликами вони приїхали — деталь реалізації тул-шару.
+    """
+    from agents.tools.observability import COMPOSES
+
+    covered = set(called)
+    for name in called:
+        covered.update(COMPOSES.get(name, ()))
+    return covered
+
+
 def run_online(case: dict, config: dict | None = None) -> dict:
     """Справжній агент на записаних виводах. Потребує ключа."""
     from agents.incident_agent import investigate
@@ -105,20 +140,25 @@ def run_online(case: dict, config: dict | None = None) -> dict:
     result = investigate({"summary": case["input"], "service": case["service"]}, config=config)
     tool_messages = [m for m in result["state"]["messages"] if m.type == "tool"]
     tools_called = [m.name for m in tool_messages]
+    covered = covered_tools(tools_called)
     if result["report"] is None:
         return {"case_id": case["id"], "tools_called": tools_called,
-                "missing_tools": sorted(set(case.get("expect_tools", [])) - set(tools_called)),
+                "missing_tools": sorted(set(case.get("expect_tools", [])) - covered),
                 "report": None, "tool_log": "", "root_cause_match": False,
-                "revisions": result["revisions"], "grounded": False, "error": result["error"]}
+                "revisions": result["revisions"], "critic_accepted": False,
+                "critic_problems": [], "error": result["error"]}
     return {
         "tool_log": "\n".join(f"[{m.name}] {m.content}" for m in tool_messages),
         "case_id": case["id"],
         "tools_called": tools_called,
-        "missing_tools": sorted(set(case.get("expect_tools", [])) - set(tools_called)),
+        "missing_tools": sorted(set(case.get("expect_tools", [])) - covered),
         "report": result["report"],
         "root_cause_match": result["report"].root_cause_label in _acceptable(case),
         "revisions": result["revisions"],
-        "grounded": result["verdict"].grounded,
+        "critic_accepted": result["verdict"].grounded,
+        # Претензії критика лежать поруч навмисно: коли він і суддя розходяться,
+        # питання «хто з них правий» має розв'язуватись доказами, а не авторитетом.
+        "critic_problems": result["verdict"].problems,
         # видно в звіті: чи агент дійшов до висновку сам, чи його дотягнув запобіжник
         "fallback_synthesis": result.get("fallback_synthesis", False),
     }

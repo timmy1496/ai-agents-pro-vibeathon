@@ -62,6 +62,20 @@
           "deployment"
         ],
         "matchAny": true
+      },
+      {
+        "name": "Агент: розслідування",
+        "type": "tags",
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "iconColor": "#3987e5",
+        "tags": [
+          "sre-agent"
+        ],
+        "matchAny": true
       }
     ]
   },
