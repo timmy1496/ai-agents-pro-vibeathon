@@ -191,7 +191,8 @@ def print_delta(current: dict, previous: dict | None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--case", help="прогнати один кейс за id")
+    parser.add_argument("--case", action="append", metavar="ID",
+                        help="прогнати лише ці кейси (можна кілька разів)")
     parser.add_argument("--no-judge", action="store_true", help="без LLM-судді")
     parser.add_argument("--html", action="store_true", help="ще й docs/eval-report.html")
     args = parser.parse_args(argv)
@@ -203,10 +204,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     selected = [c for c in dataset.by_kind("rca")
-                if args.case is None or c["id"] == args.case]
+                if not args.case or c["id"] in args.case]
     if not selected:
-        print(f"кейса '{args.case}' немає в датасеті", file=sys.stderr)
+        print(f"таких кейсів немає в датасеті: {args.case}", file=sys.stderr)
         return 2
+    if args.case and (unknown := set(args.case) - {c["id"] for c in selected}):
+        print(f"невідомі id пропущено: {sorted(unknown)}", file=sys.stderr)
 
     from agents.config import STRONG_MODEL  # імпорт тягне load_dotenv
     from agents.models import provider, reset_spend, spend

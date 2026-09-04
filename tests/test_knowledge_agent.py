@@ -12,8 +12,9 @@ from tests.fake_model import ScriptedChatModel
 def kb_in_memory():
     from agents.kb import store
 
-    store.QDRANT_URL = ":memory:"
-    store._shared_client.cache_clear()
+    # QDRANT_URL і кеш клієнта вже виставлені autouse-фікстурою `_kb_offline`
+    # на всю сесію. Скидати кеш тут не можна: викинутий локальний QdrantClient
+    # помирає разом із процесом і валить його SIGABRT уже після зеленого сьюта.
     store.reindex()
 
 

@@ -61,19 +61,31 @@ class NotApplicable:
 
 
 class Score:
-    """Оцінка виміру разом з міркуванням, з якого вона виведена."""
+    """Оцінка виміру разом з міркуванням, з якого вона виведена.
 
-    __slots__ = ("value", "rationale")
+    `spread` — різниця між найбільшою і найменшою вибіркою, коли вимір семплюється.
+    Вона потрапляє у звіт навмисно: широкий розкид означає, що самому числу вірити
+    не варто, і це має бути видно поруч із числом, а не в чиїйсь пам'яті.
+    """
 
-    def __init__(self, value: float, rationale: str) -> None:
+    __slots__ = ("value", "rationale", "samples", "spread")
+
+    def __init__(self, value: float, rationale: str,
+                 samples: int = 1, spread: float = 0.0) -> None:
         self.value = value
         self.rationale = rationale
+        self.samples = samples
+        self.spread = spread
 
     def __repr__(self) -> str:
         return f"{self.value:.2f}"
 
     def as_dict(self) -> dict:
-        return {"score": round(self.value, 3), "rationale": self.rationale}
+        scored = {"score": round(self.value, 3), "rationale": self.rationale}
+        if self.samples > 1:
+            scored["samples"] = self.samples
+            scored["spread"] = round(self.spread, 3)
+        return scored
 
 
 def _artifacts(case: dict, report: Any, tool_log: str) -> str:
@@ -134,14 +146,32 @@ def score_dimension(name: str, case: dict, report: Any, tool_log: str,
     system = f"{config.system_prompt()}\n\n---\n\n{config.dimension_prompt(name)}"
     artifacts = _artifacts(case, report, tool_log)
 
-    for attempt_text in (artifacts, artifacts + REMINDER):
-        answer = grader.invoke([{"role": "system", "content": system},
-                                {"role": "user", "content": attempt_text}])
-        try:
-            return _parse(str(answer.content), name)
-        except (ValueError, json.JSONDecodeError) as error:
-            last = error
-    return Unscored(f"суддя двічі відповів не за контрактом: {last}"[:300])
+    def one_sample() -> Score | NotApplicable | Unscored:
+        for attempt_text in (artifacts, artifacts + REMINDER):
+            answer = grader.invoke([{"role": "system", "content": system},
+                                    {"role": "user", "content": attempt_text}])
+            try:
+                return _parse(str(answer.content), name)
+            except (ValueError, json.JSONDecodeError) as error:
+                last = error
+        return Unscored(f"суддя двічі відповів не за контрактом: {last}"[:300])
+
+    wanted = config.samples(name)
+    if wanted == 1:
+        return one_sample()
+
+    # Медіана, а не середнє: одна викидна вибірка не має тягнути результат за собою,
+    # а саме одиничний викид тут і є проблемою.
+    drawn = [one_sample() for _ in range(wanted)]
+    scores = [s for s in drawn if isinstance(s, Score)]
+    if not scores:
+        return next((s for s in drawn if isinstance(s, NotApplicable)), drawn[0])
+
+    values = sorted(s.value for s in scores)
+    median = values[len(values) // 2]
+    chosen = min(scores, key=lambda s: abs(s.value - median))
+    return Score(median, chosen.rationale, samples=len(scores),
+                 spread=values[-1] - values[0])
 
 
 def judge(case: dict, report: Any, tool_log: str,

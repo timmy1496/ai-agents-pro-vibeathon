@@ -127,6 +127,15 @@ def applicable(name: str, case: dict) -> bool:
     return not any(case.get(flag) for flag in spec.get("excludes", []))
 
 
+def samples(name: str) -> int:
+    """Скільки разів опитати суддю на цьому вимірі.
+
+    Більше одного там, де вимір відкритий до тлумачення і розкид між прогонами
+    перевищує різницю, яку ми хочемо побачити. Це точність приладу, не поріг.
+    """
+    return int(dimensions()[name].get("samples", 1))
+
+
 def gate() -> dict:
     return load()["gate"]
 

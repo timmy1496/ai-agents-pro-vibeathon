@@ -149,3 +149,35 @@ def test_the_critic_metric_is_named_for_what_it_measures():
     summary = run.summarise(rows)
     assert summary["critic_accept_rate"] == 0.75
     assert "grounded_rate" not in summary
+
+
+def test_a_composite_tool_counts_as_the_tools_it_covers():
+    """Датасет описує, які ДОКАЗИ потрібні кейсу, а не якими викликами вони приїхали.
+
+    `incident_snapshot` віддає за один виклик те, що раніше збиралося чотирма. Поки
+    рахувались імена, агент після цієї оптимізації показував tool_recall 0.0 при
+    правильній відповіді — тобто метрика карала за те, що робота стала дешевшою.
+    """
+    covered = runner.covered_tools(["incident_snapshot"])
+    assert {"get_service", "golden_signals", "query_loki_patterns", "get_deploys",
+            "k8s_events"} <= covered
+    assert runner.covered_tools(["get_service"]) == {"get_service"}, \
+        "звичайний тул покриває тільки себе"
+
+
+def test_the_declared_composition_matches_what_the_tool_returns(monkeypatch):
+    """Додали джерело в композит і забули оголосити — евал почне тихо недораховувати."""
+    from agents.tools import observability
+    from agents.tools.observability import COMPOSES, incident_snapshot
+
+    from tests import fixtures
+
+    monkeypatch.setattr(observability, "_get",
+                        lambda url, params: fixtures.loki_lines(["{}"]) if "/loki/" in url
+                        else fixtures.prom_range([1.0]))
+    monkeypatch.setattr("agents.tools.stand._recent", lambda *a, **k: [])
+
+    snapshot = incident_snapshot.invoke({"service": "demo-chaos-svc"})
+    assert len(snapshot) == len(COMPOSES["incident_snapshot"]), (
+        f"композит віддає {len(snapshot)} секцій, а оголошено покриття "
+        f"{len(COMPOSES['incident_snapshot'])} тулів — списки розійшлись")

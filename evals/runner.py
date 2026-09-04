@@ -117,6 +117,22 @@ def is_solvable(case: dict, evidence: dict) -> bool:
     return classify(evidence) in _acceptable(case)
 
 
+def covered_tools(called: list[str]) -> set[str]:
+    """Які тули фактично покриті — з урахуванням композитів.
+
+    `incident_snapshot` віддає за один виклик те, що раніше збиралося чотирма. Якщо
+    рахувати самі імена, агент, який зібрав ті самі дані дешевше, виглядає гіршим за
+    того, хто зробив чотири виклики. Датасет описує, які ДОКАЗИ потрібні кейсу, а
+    якими викликами вони приїхали — деталь реалізації тул-шару.
+    """
+    from agents.tools.observability import COMPOSES
+
+    covered = set(called)
+    for name in called:
+        covered.update(COMPOSES.get(name, ()))
+    return covered
+
+
 def run_online(case: dict, config: dict | None = None) -> dict:
     """Справжній агент на записаних виводах. Потребує ключа."""
     from agents.incident_agent import investigate
@@ -124,9 +140,10 @@ def run_online(case: dict, config: dict | None = None) -> dict:
     result = investigate({"summary": case["input"], "service": case["service"]}, config=config)
     tool_messages = [m for m in result["state"]["messages"] if m.type == "tool"]
     tools_called = [m.name for m in tool_messages]
+    covered = covered_tools(tools_called)
     if result["report"] is None:
         return {"case_id": case["id"], "tools_called": tools_called,
-                "missing_tools": sorted(set(case.get("expect_tools", [])) - set(tools_called)),
+                "missing_tools": sorted(set(case.get("expect_tools", [])) - covered),
                 "report": None, "tool_log": "", "root_cause_match": False,
                 "revisions": result["revisions"], "critic_accepted": False,
                 "critic_problems": [], "error": result["error"]}
@@ -134,7 +151,7 @@ def run_online(case: dict, config: dict | None = None) -> dict:
         "tool_log": "\n".join(f"[{m.name}] {m.content}" for m in tool_messages),
         "case_id": case["id"],
         "tools_called": tools_called,
-        "missing_tools": sorted(set(case.get("expect_tools", [])) - set(tools_called)),
+        "missing_tools": sorted(set(case.get("expect_tools", [])) - covered),
         "report": result["report"],
         "root_cause_match": result["report"].root_cause_label in _acceptable(case),
         "revisions": result["revisions"],

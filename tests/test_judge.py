@@ -131,3 +131,34 @@ def test_every_declared_dimension_is_attempted(graded):
     graded(*['{"rationale": "r", "score": 0.7}'] * len(config.dimensions()))
     scores = judging.judge(CASE, None, "лог")
     assert set(scores) == set(config.dimensions())
+
+
+def test_a_sampled_dimension_takes_the_median_not_a_single_draw(graded, monkeypatch):
+    """Заміряно на живих прогонах: той самий кейс дав actionability 0.40 / 0.70 / 0.95.
+
+    Розкид 0.55 ширший за різницю, яку гейт намагається побачити, — тобто одиничний
+    вимір там нічого не вирішує. Медіана, а не середнє: одна викидна вибірка не має
+    тягнути результат за собою, а саме одиничний викид тут і є проблемою.
+    """
+    monkeypatch.setattr(config, "samples", lambda name: 3 if name == "actionability" else 1)
+    graded('{"rationale": "суворо", "score": 0.4}',
+           '{"rationale": "помірно", "score": 0.7}',
+           '{"rationale": "мʼяко", "score": 0.95}')
+
+    result = score("actionability")
+    assert result.value == 0.7, "медіана трьох вибірок"
+    assert result.as_dict()["spread"] == 0.55, "розкид має бути видимим поруч із числом"
+    assert result.as_dict()["samples"] == 3
+
+
+def test_a_single_sample_dimension_costs_one_call(graded, monkeypatch):
+    monkeypatch.setattr(config, "samples", lambda name: 1)
+    fake = graded('{"rationale": "r", "score": 0.8}')
+    assert score("correctness").value == 0.8
+    assert len(fake.seen) == 1, "вимір без семплювання не має коштувати більше одного виклику"
+
+
+def test_spread_is_absent_when_the_dimension_is_not_sampled(graded, monkeypatch):
+    monkeypatch.setattr(config, "samples", lambda name: 1)
+    graded('{"rationale": "r", "score": 0.8}')
+    assert "spread" not in score("correctness").as_dict()

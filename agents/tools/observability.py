@@ -240,6 +240,17 @@ def query_loki_logs(service: str, contains: str, minutes: int = 30, limit: int =
             "matched": len(lines), "lines": lines[:limit]}
 
 
+# Що саме композит покриває. Оголошено поруч із ним навмисно: цей список читають
+# евали, щоб не вимагати окремого виклику тула, дані якого вже приїхали разом.
+# Міряти імена викликаних тулів замість покриття доказами — помилка вимірювання:
+# агент, який зібрав ті самі дані одним викликом замість чотирьох, зробив краще,
+# а не гірше.
+COMPOSES = {
+    "incident_snapshot": ("get_service", "golden_signals", "query_loki_patterns",
+                          "get_deploys", "k8s_events"),
+}
+
+
 @tool
 def incident_snapshot(service: str, minutes: int = 30) -> dict:
     """Усе, з чого починається розслідування, за один виклик: картка сервісу,
