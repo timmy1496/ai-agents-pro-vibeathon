@@ -18,7 +18,7 @@ from agents.config import AGENT_TOKEN, AGENT_TOKEN_IS_DEFAULT
 from agents.observability import trace_config
 from agents.config import DATA_DIR
 from agents.supervisor import build_supervisor
-from agents.tools.actions import SLACK_FILE, post_slack
+from agents.tools.actions import SLACK_FILE, create_annotation, edit_message, post_slack
 
 log = logging.getLogger(__name__)
 PROCESSED = DATA_DIR / "processed_alerts.json"
@@ -65,6 +65,93 @@ def _handle(text: str, thread_id: str) -> str:
     return answer
 
 
+def _annotate(service: str, text: str) -> None:
+    """Слід розслідування на графіках. Механічний наслідок звіту, не рішення моделі."""
+    if service:
+        create_annotation.invoke({"service": service, "text": text[:180],
+                                  "tags": ["rca"]})
+
+
+def _investigate_and_post(summary: str, thread_id: str) -> None:
+    """Розслідування з ранньою публікацією: звіт у тред одразу, вердикт критика — слідом.
+
+    Критик додає 15-40 секунд, і тримати через нього готовий звіт немає сенсу.
+    """
+    from agents.incident_agent import investigate
+    from agents.supervisor import render_report
+
+    published: dict = {}
+
+    def publish(report) -> None:
+        rendered = render_report({"report": report, "revisions": 0, "verdict": None})
+        published["reference"] = post_slack.invoke({"thread_id": thread_id, "text": rendered})
+        # Пам'ять треда наповнюється РАЗОМ з публікацією, а не після критика.
+        # Людина починає питати щойно побачила звіт — а це на 20-40 секунд раніше,
+        # ніж критик закінчить. У тому вікні контекст мусить уже бути.
+        _remember_investigation(thread_id, summary, rendered)
+
+    try:
+        outcome = investigate({"summary": summary, "service": _service_from(summary)},
+                              config=trace_config(thread_id, tags=["sre-agent"]),
+                              on_report=publish)
+    except Exception as error:
+        # Розслідування бігає у фоні, тому виняток тут нікому повернути: HTTP-відповідь
+        # Alertmanager отримав кілька десятків секунд тому. Без цього блоку скінчений
+        # ключ, недоступний провайдер або впала залежність виглядають однаково — як тред,
+        # у якому черговий чекає на відповідь, якої вже не буде, а причина лишається
+        # в stderr процесу.
+        log.exception("розслідування у треді %s не завершилось", thread_id)
+        post_slack.invoke({
+            "thread_id": thread_id,
+            "text": f":warning: Розслідування не завершилось: "
+                    f"{type(error).__name__}: {error}\n"
+                    f"Алерт лишається відкритим — розбирає людина."})
+        return
+
+    if outcome["report"] is None:
+        post_slack.invoke({"thread_id": thread_id,
+                           "text": f":warning: звіт не завершено: {outcome['error']}"})
+        return
+
+    # Звіт уже в треді — дописуємо його на місці, а не додаємо нових повідомлень:
+    # вердикт критика і виправлення після нього це той самий звіт у кращій редакції.
+    reference = published.get("reference")
+    if reference:
+        edit_message(reference, render_report(outcome))
+    if outcome["revisions"]:
+        # звіт уже в пам'яті; після доопрацювання дописуємо лише що змінилось,
+        # інакше в контексті треда лежали б дві майже однакові копії
+        _remember_note(thread_id,
+                       f"Звіт уточнено після критики: {outcome['report'].hypothesis}")
+    _annotate(_service_from(summary), outcome["report"].hypothesis)
+
+
+def _remember_investigation(thread_id: str, question: str, report: str) -> None:
+    """Записує розслідування в пам'ять треда.
+
+    Розслідування йде повз супервізор — напряму в investigate(), щоб звіт можна було
+    опублікувати до критика. Але тоді checkpointer супервізора лишається порожнім,
+    і згадка в тому ж треді приходить у контекст, де нічого не відбувалось: агент
+    чесно відповідає, що не розуміє, про що йдеться. Тому дописуємо стан явно.
+    """
+    supervisor.update_state(
+        {"configurable": {"thread_id": thread_id}},
+        {"messages": [{"role": "user", "content": question},
+                      {"role": "assistant", "content": report}],
+         "intent": "ALERT", "service": _service_from(question)})
+
+
+def _remember_note(thread_id: str, note: str) -> None:
+    """Дописує коротку примітку в пам'ять треда."""
+    supervisor.update_state({"configurable": {"thread_id": thread_id}},
+                            {"messages": [{"role": "assistant", "content": note}]})
+
+
+def _service_from(summary: str) -> str:
+    """Витягує назву сервісу з рядка алерту виду "<alert> <severity> на <service>: ..."."""
+    return summary.split(" на ")[-1].split(":")[0].strip() if " на " in summary else ""
+
+
 def _process_alert(summary: str, thread_id: str) -> None:
     """Оголошення алерту і розслідування — обидва у фоні.
 
@@ -73,7 +160,7 @@ def _process_alert(summary: str, thread_id: str) -> None:
     її по дедлайну, тож у самому обробнику не має лишитись ніякого вводу-виводу.
     """
     post_slack.invoke({"thread_id": thread_id, "text": f":rotating_light: {summary}"})
-    _handle(summary, thread_id)
+    _investigate_and_post(summary, thread_id)
 
 
 @app.post("/webhook/alert", dependencies=[Depends(require_token)])

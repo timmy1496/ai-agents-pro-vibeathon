@@ -18,9 +18,10 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(actions, "SLACK_FILE", slack)
     monkeypatch.setattr(app_module, "SLACK_FILE", slack)
     monkeypatch.setattr(app_module, "PROCESSED", tmp_path / "processed.json")
-    monkeypatch.setattr(app_module, "_handle",
-                        lambda text, thread_id: actions.post_slack.invoke(
-                            {"thread_id": thread_id, "text": f"звіт по: {text}"}) and "готово")
+    # підміняємо саме розслідування: воно єдине ходить до моделі
+    monkeypatch.setattr(app_module, "_investigate_and_post",
+                        lambda summary, thread_id: actions.post_slack.invoke(
+                            {"thread_id": thread_id, "text": f"звіт по: {summary}"}))
     return TestClient(app_module.app), slack
 
 
@@ -130,6 +131,7 @@ def test_failed_investigation_lands_in_the_thread_not_only_in_stderr(monkeypatch
     агент просто мовчить: черговий чекає на відповідь, якої вже не буде.
     """
     import agents.app as app_module
+    import agents.incident_agent as incident
     import agents.tools.actions as actions
 
     slack = tmp_path / "slack.json"
@@ -139,7 +141,8 @@ def test_failed_investigation_lands_in_the_thread_not_only_in_stderr(monkeypatch
     def boom(*args, **kwargs):
         raise RuntimeError("немає ключа моделі")
 
-    monkeypatch.setattr(app_module.supervisor, "invoke", boom)
+    # Патчимо саме `investigate`: вебхук ходить у нього напряму, а не через супервізор.
+    monkeypatch.setattr(incident, "investigate", boom)
     http = TestClient(app_module.app)
     http.post("/webhook/alert", headers=AUTH, json={"alerts": [{
         "fingerprint": "f1", "labels": {"alertname": "HighErrorRate", "service": "x"},
@@ -170,7 +173,7 @@ def test_webhook_schedules_work_instead_of_doing_it(monkeypatch, tmp_path):
     monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
     scheduled = []
     monkeypatch.setattr(app_module, "_process_alert",
-                        lambda summary, thread_id: scheduled.append(thread_id))
+                        lambda summary, thread_id, alertname="": scheduled.append(thread_id))
 
     with TestClient(app_module.app) as http:
         http.post("/webhook/alert", headers=AUTH, json={"alerts": [{
@@ -249,3 +252,89 @@ def test_a_new_firing_after_resolution_is_a_new_incident(client):
 
     assert again["accepted"] == 1, "нове загоряння — новий інцидент"
     assert again["threads"][0] != first["threads"][0], "і новий тред"
+
+
+def test_incident_thread_ends_with_exactly_two_messages(monkeypatch, tmp_path):
+    """Алерт і звіт. Вердикт критика дописується у звіт, а не додає третє повідомлення."""
+    import agents.app as app_module
+    import agents.tools.actions as actions
+    from agents.incident_agent import Evidence, RCAReport, Verdict
+
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
+    monkeypatch.setattr(app_module, "_annotate", lambda service, text: None)
+
+    report = RCAReport(service="demo-chaos-svc", root_cause_label="release",
+                       hypothesis="регресія в v1.5.0", confidence=0.93,
+                       evidence=[Evidence(fact="error rate 34%", source="PromQL")],
+                       recommended_actions=["відкотити"])
+
+    def fake_investigate(alert, config=None, on_report=None, **kwargs):
+        on_report(report)  # звіт публікується одразу
+        return {"report": report, "verdict": Verdict(grounded=True, verdict="ACCEPT"),
+                "revisions": 0, "state": {"messages": []}}
+
+    monkeypatch.setattr("agents.incident_agent.investigate", fake_investigate)
+    app_module._process_alert("HighErrorRate critical на demo-chaos-svc: 34%", "t1")
+
+    thread = json.loads((tmp_path / "slack.json").read_text())["t1"]
+    assert len(thread) == 2, f"мало бути алерт і звіт, а не {len(thread)}"
+    assert thread[0]["text"].startswith(":rotating_light:")
+    assert "критик" in thread[1]["text"], "вердикт має опинитись усередині звіту"
+    assert "регресія в v1.5.0" in thread[1]["text"]
+
+
+def test_investigation_is_written_into_thread_memory(monkeypatch, tmp_path):
+    """Без цього згадка в треді інциденту приходить у порожній контекст.
+
+    Розслідування йде повз супервізор заради ранньої публікації звіту, тому стан
+    треба записати явно — інакше «а чи було таке раніше?» агент не розуміє.
+    """
+    import agents.app as app_module
+    import agents.tools.actions as actions
+    from agents.incident_agent import RCAReport, Verdict
+
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
+    monkeypatch.setattr(app_module, "_annotate", lambda service, text: None)
+
+    report = RCAReport(service="demo-chaos-svc", root_cause_label="release",
+                       hypothesis="регресія в v1.5.0", confidence=0.93,
+                       evidence=[], recommended_actions=["відкотити"])
+    monkeypatch.setattr("agents.incident_agent.investigate",
+                        lambda alert, config=None, on_report=None, **kw: (
+                            on_report(report),
+                            {"report": report, "verdict": Verdict(grounded=True, verdict="ACCEPT"),
+                             "revisions": 0, "state": {"messages": []}})[1])
+
+    app_module._investigate_and_post("HighErrorRate critical на demo-chaos-svc: 34%", "інцидент-1")
+
+    saved = app_module.supervisor.get_state(
+        {"configurable": {"thread_id": "інцидент-1"}}).values["messages"]
+    assert len(saved) == 2, "у пам'яті треда мають бути питання і звіт"
+    assert "регресія в v1.5.0" in saved[-1].content
+
+
+def test_memory_is_filled_when_the_report_is_published_not_after_the_critic(monkeypatch, tmp_path):
+    """Людина питає щойно побачила звіт — на 20-40 секунд раніше, ніж критик закінчить."""
+    import agents.app as app_module
+    import agents.tools.actions as actions
+    from agents.incident_agent import RCAReport, Verdict
+
+    monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack.json")
+    monkeypatch.setattr(app_module, "_annotate", lambda service, text: None)
+
+    report = RCAReport(service="s", root_cause_label="release", hypothesis="h",
+                       confidence=0.9, evidence=[], recommended_actions=[])
+    order = []
+
+    def fake_investigate(alert, config=None, on_report=None, **kwargs):
+        on_report(report)
+        order.append(("памʼять після публікації", len(app_module.supervisor.get_state(
+            {"configurable": {"thread_id": "інц-2"}}).values.get("messages", []))))
+        return {"report": report, "verdict": Verdict(grounded=True, verdict="ACCEPT"),
+                "revisions": 0, "state": {"messages": []}}
+
+    monkeypatch.setattr("agents.incident_agent.investigate", fake_investigate)
+    app_module._investigate_and_post("HighErrorRate critical на s: 34%", "інц-2")
+
+    assert order == [("памʼять після публікації", 2)], \
+        "контекст має бути готовий уже в момент публікації звіту"

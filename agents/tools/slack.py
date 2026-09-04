@@ -16,6 +16,7 @@ import urllib.request
 from agents.config import DATA_DIR, SLACK_BOT_TOKEN, SLACK_CHANNEL
 
 API = "https://slack.com/api/chat.postMessage"
+UPDATE_API = "https://slack.com/api/chat.update"
 THREAD_MAP = DATA_DIR / "slack_thread_map.json"
 # Slack ріже секцію на 3000 символах; лишаємо запас на розмітку
 MAX_SECTION_CHARS = 2900
@@ -65,9 +66,9 @@ def _blocks(text: str) -> list[dict]:
     return [{"type": "section", "text": {"type": "mrkdwn", "text": chunk}} for chunk in chunks]
 
 
-def _call(payload: dict) -> dict:
+def _call(payload: dict, url: str = API) -> dict:
     request = urllib.request.Request(
-        API, data=json.dumps(payload).encode(), method="POST",
+        url, data=json.dumps(payload).encode(), method="POST",
         headers={"Content-Type": "application/json; charset=utf-8",
                  "Authorization": f"Bearer {SLACK_BOT_TOKEN}"})
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -135,3 +136,17 @@ HINTS = {
 
 def _hint(error: str) -> str:
     return HINTS.get(error, "")
+
+
+def update(channel: str, ts: str, text: str) -> dict:
+    """Переписує вже опубліковане повідомлення.
+
+    Потрібно, щоб звіт дописувався на місці: вердикт критика і уточнення після нього —
+    це той самий звіт у кращій редакції, а не нові повідомлення в треді.
+    """
+    response = _call({"channel": channel, "ts": ts, "text": text[:200],
+                      "blocks": _blocks(text)}, url=UPDATE_API)
+    if not response.get("ok"):
+        return {"error": f"slack: {response.get('error', 'unknown')}",
+                "hint": _hint(response.get("error", ""))}
+    return {"updated": True, "channel": response["channel"], "ts": response["ts"]}

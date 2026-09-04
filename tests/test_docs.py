@@ -65,3 +65,44 @@ def test_links_between_docs_are_not_broken(texts):
         for target in re.findall(r"\]\((?!https?:|#)([^)]+)\)", text):
             path = (base / target.split("#")[0]).resolve()
             assert path.exists(), f"{name}: посилання на {target} нікуди не веде"
+
+
+def test_adrs_follow_the_madr_conventions():
+    """MADR: NNNN-slug.md, front-matter зі статусом і датою, заголовок і три секції.
+
+    Без цього ADR перетворюються на вільні нотатки: перший же запис без «Considered
+    Options» — це рішення без альтернатив, тобто не рішення, а констатація.
+    """
+    adr_dir = ROOT / "docs" / "adr"
+    files = sorted(adr_dir.glob("*.md"))
+    assert files, "тека ADR порожня"
+
+    seen_indexes = set()
+    for path in files:
+        assert re.fullmatch(r"\d{4}-[a-z0-9-]+\.md", path.name), \
+            f"{path.name}: очікується NNNN-slug-with-dashes.md"
+        index = path.name[:4]
+        assert index not in seen_indexes, f"дубльований індекс {index}"
+        seen_indexes.add(index)
+
+        text = path.read_text(encoding="utf-8")
+        assert text.startswith("---\n"), f"{path.name}: немає front-matter"
+        head = text.split("---", 2)[1]
+        assert re.search(r"^status: ", head, re.M), f"{path.name}: немає status"
+        assert re.search(r"^date: \d{4}-\d{2}-\d{2}", head, re.M), f"{path.name}: немає дати"
+
+        body = text.split("---", 2)[2]
+        assert re.search(r"^# .+", body, re.M), f"{path.name}: немає заголовка"
+        for section in ("## Context and Problem Statement", "## Considered Options",
+                        "## Decision Outcome"):
+            assert section in body, f"{path.name}: немає секції {section!r}"
+        assert body.count("\n* ") >= 2 or body.count("\n- ") >= 2, \
+            f"{path.name}: менше двох розглянутих варіантів — це не рішення"
+        assert "{" not in body, f"{path.name}: незаповнений плейсхолдер шаблону"
+
+
+def test_no_registry_file_shadows_the_directory_listing():
+    """Конвенція: індекс ADR — це `ls`, а не окремий файл, який розходиться з реальністю."""
+    for name in ("index.md", "README.md", "INDEX.md", "toc.md"):
+        assert not (ROOT / "docs" / "adr" / name).exists(), \
+            f"docs/adr/{name}: реєстр не ведеться, лістинг теки і є індексом"

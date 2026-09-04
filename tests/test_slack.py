@@ -11,7 +11,7 @@ def slack_api(monkeypatch, tmp_path):
 
     calls, state = [], {"response": {"ok": True, "ts": "1700000000.1", "channel": "C1"}}
 
-    def fake_call(payload):
+    def fake_call(payload, url=None):
         calls.append(payload)
         return state["response"]
 
@@ -122,3 +122,23 @@ def test_incident_lookup_by_slack_thread(slack_api):
     assert found == "incident-abc-2026-09-03T20:00:00", \
         "самопосилання не має перемагати справжній інцидент"
     assert slack.incident_for_thread("невідомий-ts") is None
+
+
+def test_update_rewrites_the_same_message(slack_api):
+    from agents.tools import slack
+
+    posted = slack.post("alert-abc", "перша редакція звіту")
+    slack.update(posted["channel"], posted["ts"], "звіт з вердиктом критика")
+
+    call = slack_api.calls[-1]
+    assert call["ts"] == posted["ts"], "має редагуватись те саме повідомлення"
+    assert "вердиктом" in call["blocks"][0]["text"]["text"]
+
+
+def test_update_reports_failure_with_a_hint(slack_api):
+    from agents.tools import slack
+
+    posted = slack.post("alert-abc", "звіт")
+    slack_api.state["response"] = {"ok": False, "error": "message_not_found"}
+    result = slack.update(posted["channel"], posted["ts"], "нова редакція")
+    assert result["error"] == "slack: message_not_found"

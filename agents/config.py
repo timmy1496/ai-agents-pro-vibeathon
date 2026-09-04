@@ -42,6 +42,10 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_CHANNEL = os.getenv("SLACK_CHANNEL", "#sre-agent")
 # App-level token (xapp-...) для Socket Mode — це окремий токен від бот-токена
 SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN", "")
+
+# Жарт у тред, поки триває RCA. Вимикається на час справжніх інцидентів:
+# доречність гумору залежить від того, кому зараз погано.
+JOKES_ENABLED = os.getenv("SRE_JOKES", "1") not in ("0", "false", "")
 KB_COLLECTION = os.getenv("KB_COLLECTION", "sre_kb")
 
 # Куди fastembed кладе ONNX-моделі. Дефолт бібліотеки — $TMPDIR/fastembed_cache, а це

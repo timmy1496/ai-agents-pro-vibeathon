@@ -238,3 +238,24 @@ def query_loki_logs(service: str, contains: str, minutes: int = 30, limit: int =
                         minutes, limit)
     return {"service": service, "contains": contains,
             "matched": len(lines), "lines": lines[:limit]}
+
+
+@tool
+def incident_snapshot(service: str, minutes: int = 30) -> dict:
+    """Усе, з чого починається розслідування, за один виклик: картка сервісу,
+    golden signals з baseline, топ-патерни помилок, деплої і події кластера.
+
+    Викликай ЦЕ першим замість чотирьох окремих тулів. Кожен виклик тулу — це ще один
+    обіг до моделі, а вони й складають майже весь час розслідування.
+    """
+    from agents.tools.catalog import get_service
+    from agents.tools.stand import get_deploys, k8s_events
+
+    return {
+        "service_card": get_service.invoke({"name": service}),
+        "signals": golden_signals.invoke({"service": service, "minutes": minutes})["signals"],
+        "log_patterns": query_loki_patterns.invoke(
+            {"service": service, "minutes": minutes})["patterns"],
+        "deploys": get_deploys.invoke({"service": service, "hours": 6}),
+        "k8s_events": k8s_events.invoke({"service": service, "hours": 6}),
+    }

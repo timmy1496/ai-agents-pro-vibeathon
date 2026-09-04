@@ -117,5 +117,89 @@
     "author": "demo",
     "commit": "deadbee",
     "ts": "2026-09-03T20:08:28Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T20:17:28Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T20:23:43Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T20:26:42Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T20:27:52Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T20:34:58Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T20:39:18Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T20:52:58Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T21:00:51Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T21:03:57Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T21:06:07Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T21:09:26Z"
+  },
+  {
+    "service": "demo-chaos-svc",
+    "version": "1.5.0",
+    "author": "demo",
+    "commit": "deadbee",
+    "ts": "2026-09-03T21:15:03Z"
   }
 ]

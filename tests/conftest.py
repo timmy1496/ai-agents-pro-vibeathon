@@ -20,7 +20,7 @@ import pytest
 # перестає перевірятись — а сьют лишається зеленим і навіть швидшає. Число піднімають
 # разом з новими тестами; воно завжди трохи нижче за фактичне, щоб не червоніти на
 # кожному видаленому параметрі.
-MIN_COLLECTED = 300
+MIN_COLLECTED = 325
 
 def pytest_collection_modifyitems(session, config, items):
     """Гард працює лише на повному прогоні: `pytest tests/test_kb.py` збирає менше і це нормально."""
@@ -57,6 +57,7 @@ def isolated_state(monkeypatch, tmp_path):
     """
     import agents.app as app_module
     import agents.checkpoint as checkpoint
+    from agents import jokes
     import agents.tools.actions as actions
     from agents.tools import slack
 
@@ -64,6 +65,14 @@ def isolated_state(monkeypatch, tmp_path):
     # між прогонами і тести починають бачити чужі повідомлення
     checkpoint.saver.cache_clear()
     monkeypatch.setattr(checkpoint, "CHECKPOINT_DB", tmp_path / "checkpoints.sqlite")
+    # app.supervisor створюється при імпорті модуля, тому підміни шляху йому замало —
+    # без перезбирання графа тести пишуть у справжню базу і бачать стан минулих прогонів
+    from agents.supervisor import build_supervisor
+
+    monkeypatch.setattr(app_module, "supervisor", build_supervisor())
+    # Жарт — оздоблення, а не частина потоку інциденту: тести цього потоку не мають
+    # ламатись від зміни списку жартів. test_jokes вмикає їх у себе явно.
+    monkeypatch.setattr(jokes, "JOKES_ENABLED", False)
     monkeypatch.setattr(app_module, "PROCESSED", tmp_path / "processed_alerts.json")
     monkeypatch.setattr(app_module, "SLACK_FILE", tmp_path / "slack_threads.json")
     monkeypatch.setattr(actions, "SLACK_FILE", tmp_path / "slack_threads.json")
