@@ -128,7 +128,8 @@ def run_online(case: dict, config: dict | None = None) -> dict:
         return {"case_id": case["id"], "tools_called": tools_called,
                 "missing_tools": sorted(set(case.get("expect_tools", [])) - set(tools_called)),
                 "report": None, "tool_log": "", "root_cause_match": False,
-                "revisions": result["revisions"], "grounded": False, "error": result["error"]}
+                "revisions": result["revisions"], "critic_accepted": False,
+                "critic_problems": [], "error": result["error"]}
     return {
         "tool_log": "\n".join(f"[{m.name}] {m.content}" for m in tool_messages),
         "case_id": case["id"],
@@ -137,7 +138,10 @@ def run_online(case: dict, config: dict | None = None) -> dict:
         "report": result["report"],
         "root_cause_match": result["report"].root_cause_label in _acceptable(case),
         "revisions": result["revisions"],
-        "grounded": result["verdict"].grounded,
+        "critic_accepted": result["verdict"].grounded,
+        # Претензії критика лежать поруч навмисно: коли він і суддя розходяться,
+        # питання «хто з них правий» має розв'язуватись доказами, а не авторитетом.
+        "critic_problems": result["verdict"].problems,
         # видно в звіті: чи агент дійшов до висновку сам, чи його дотягнув запобіжник
         "fallback_synthesis": result.get("fallback_synthesis", False),
     }

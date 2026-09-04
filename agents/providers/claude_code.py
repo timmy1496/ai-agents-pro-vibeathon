@@ -360,14 +360,27 @@ class ClaudeCodeChatModel(BaseChatModel):
             names = {spec["function"]["name"] for spec in self.tools}
             reformat = self.model_copy(update={"tools": [], "force_tool_call": False})
             reformat.spend = self.spend
-            payload = reformat._run_cli(
+            instruction = (
                 "Ти перекладаєш готову відповідь у виклик інструмента. Нічого не вигадуй, "
                 "нічого не втрачай, нічого не оцінюй наново: усе потрібне вже є в тексті.\n"
                 'Поверни РІВНО один JSON-об\'єкт {"name": "<інструмент>", "args": {…}} '
-                "і нічого крім нього.",
-                f"{_tool_contract(self.tools)}\n\nТЕКСТ, ЯКИЙ ТРЕБА ПЕРЕКЛАСТИ "
-                f"У ВИКЛИК:\n{failure.raw}")
-            call = _first_object(str(payload.get("result", "")))
+                "і нічого крім нього. НЕ описуй, що ти зробив — сам об'єкт і є відповідь.\n"
+                f"{NO_ENV_TOOLS}")
+            body = (f"{_tool_contract(self.tools)}\n\nТЕКСТ, ЯКИЙ ТРЕБА ПЕРЕКЛАСТИ "
+                    f"У ВИКЛИК:\n{failure.raw}")
+
+            # Друга спроба і тут: модель відповідала «Виклик інструмента RCAReport
+            # виконано з повним перекладом» — тобто рапортувала про роботу замість того,
+            # щоб її віддати. Крок перекладу був єдиним без ретраю, і кейс unk-03 помер
+            # саме на ньому.
+            for attempt_body in (body, body + "\n\n[СИСТЕМА] Попередня відповідь була "
+                                              "описом дії, а не самим об'єктом. Поверни JSON."):
+                payload = reformat._run_cli(instruction, attempt_body)
+                try:
+                    call = _first_object(str(payload.get("result", "")))
+                    break
+                except ClaudeCodeError:
+                    call = {}
             name, args = call.get("name"), call.get("args")
             if name not in names or not isinstance(args, dict):
                 raise ClaudeCodeError(

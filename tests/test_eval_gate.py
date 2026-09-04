@@ -128,3 +128,24 @@ def test_saturation_word_without_load_growth_is_not_capacity():
     under_load = {**flat, "signals": {"rps": {"current_avg": 280.0, "baseline_avg": 88.0}}}
     assert runner.classify(under_load) == "capacity", \
         "та сама ознака ПІД навантаженням — вже насичення"
+
+
+def test_the_critic_metric_is_named_for_what_it_measures():
+    """`grounded_rate` міряв ВЕРДИКТ КРИТИКА, а називався так, ніби міряє звіт.
+
+    Різниця перестала бути академічною на прогоні 2026-09-04: критик відхилив два
+    звіти, спаливши по два оберти, а незалежний суддя дав тим самим звітам
+    groundedness 0.85 і 1.0. Поки метрика називалась grounded_rate, червоний гейт
+    читався як «агент вигадує», хоча насправді шумів критик.
+    """
+    from evals import config, run
+
+    assert "min_critic_accept_rate" in config.gate()
+    assert "min_grounded_rate" not in config.gate(), "стара назва не має лишатись"
+
+    rows = [{"root_cause_match": True, "missing_tools": [], "revisions": 0,
+             "critic_accepted": accepted, "fallback_synthesis": False}
+            for accepted in (True, True, False, True)]
+    summary = run.summarise(rows)
+    assert summary["critic_accept_rate"] == 0.75
+    assert "grounded_rate" not in summary

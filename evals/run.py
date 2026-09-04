@@ -80,7 +80,13 @@ def summarise(rows: list[dict]) -> dict:
         "cases": total,
         "root_cause_accuracy": round(sum(r["root_cause_match"] for r in rows) / total, 3),
         "tool_recall": round(sum(not r["missing_tools"] for r in rows) / total, 3),
-        "grounded_rate": round(sum(r["grounded"] for r in rows) / total, 3),
+        # Не "grounded_rate": ця метрика ніколи не міряла обґрунтованість звіту — вона
+        # міряє ВЕРДИКТ КРИТИКА. Різниця перестала бути академічною на прогоні
+        # 2026-09-04: критик відхилив два звіти, спаливши по два оберти, а незалежний
+        # суддя дав тим самим звітам groundedness 0.85 і 1.0. Обґрунтованість міряє
+        # суддя (вимір `groundedness`); тут — скільки звітів пройшли критика з першого
+        # разу, тобто наскільки дорогий і наскільки шумний сам критик.
+        "critic_accept_rate": round(sum(r["critic_accepted"] for r in rows) / total, 3),
         "self_completed": round(sum(not r.get("fallback_synthesis") for r in rows) / total, 3),
         "avg_revisions": round(sum(r["revisions"] for r in rows) / total, 2),
     }
@@ -108,7 +114,7 @@ def check_gate(summary: dict, previous: dict | None) -> list[str]:
         f"{metric} = {summary[metric]:.3f} нижче порогу {thresholds[key]:.2f}"
         for key, metric in (("min_root_cause_accuracy", "root_cause_accuracy"),
                             ("min_tool_recall", "tool_recall"),
-                            ("min_grounded_rate", "grounded_rate"),
+                            ("min_critic_accept_rate", "critic_accept_rate"),
                             ("min_self_completed", "self_completed"),
                             ("min_correctness", "correctness"),
                             ("min_groundedness", "groundedness"),

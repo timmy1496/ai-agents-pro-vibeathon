@@ -17,7 +17,7 @@ def make_report(gate_passed: bool = True, rows: list[dict] | None = None) -> dic
                  "prompts_sha": config.prompts_digest(), "judge_model": "test-judge",
                  "agent_model": "test-agent", "cases": len(rows or [])},
         "summary": {"cases": 1, "root_cause_accuracy": 1.0, "tool_recall": 1.0,
-                    "grounded_rate": 1.0, "self_completed": 1.0, "avg_revisions": 0.0,
+                    "critic_accept_rate": 1.0, "self_completed": 1.0, "avg_revisions": 0.0,
                     "correctness": 0.9},
         "gate": {"passed": gate_passed,
                  "failures": [] if gate_passed else ["correctness = 0.400 нижче порогу 0.70"]},
@@ -27,7 +27,7 @@ def make_report(gate_passed: bool = True, rows: list[dict] | None = None) -> dic
 
 def row(case_id: str = "rel-01", **overrides) -> dict:
     base = {"case_id": case_id, "root_cause": "release", "root_cause_match": True,
-            "missing_tools": [], "revisions": 0, "grounded": True,
+            "missing_tools": [], "revisions": 0, "critic_accepted": True,
             "judge": {"correctness": {"score": 0.9, "rationale": "докази збігаються"}}}
     return {**base, **overrides}
 

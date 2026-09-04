@@ -126,7 +126,7 @@ def test_policy_cases_cover_both_verdicts():
 def test_gate_thresholds_are_all_declared():
     """Поріг, якого немає в toml, — це поріг, якого немає взагалі."""
     required = {
-        "min_root_cause_accuracy", "min_tool_recall", "min_grounded_rate",
+        "min_root_cause_accuracy", "min_tool_recall", "min_critic_accept_rate",
         "min_self_completed", "min_correctness", "min_groundedness",
         "min_actionability", "max_drop", "max_unscored",
     }
