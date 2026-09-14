@@ -50,6 +50,20 @@ urls:
 	@echo ""
 	@echo "Перед демо:   make doctor-warm"
 
+.PHONY: embed-serve embed-check embed-bench
+embed-serve:   ## Ембеддер KB локально: nomic-embed-text-v2-moe через llama-server на :8081 (ADR-0010)
+	llama-server -hf nomic-ai/nomic-embed-text-v2-moe-GGUF:Q8_0 --embedding --pooling mean \
+	  --ctx-size 512 --ubatch-size 512 --batch-size 512 --host 127.0.0.1 --port 8081
+
+embed-check:   ## Чи відповідає ембеддер: /health і два вектори по 768 з /v1/embeddings
+	@curl -sf localhost:8081/health && echo
+	@curl -sf localhost:8081/v1/embeddings -H 'Content-Type: application/json' \
+	  -d '{"input": ["search_query: інциденти з OOMKilled", "search_document: # Runbook: OOMKilled"]}' \
+	  | python3 -c "import sys,json; d=json.load(sys.stdin); print('vectors:', len(d['data']), 'dims:', len(d['data'][0]['embedding']), 'tokens:', d['usage']['prompt_tokens'])"
+
+embed-bench:   ## Замір ембеддера на KB: hit@k і щілина релевантне/стороннє (числа ADR-0010)
+	.venv/bin/python -m scripts.embed_bench $(EMBED_BENCH_ARGS)
+
 .PHONY: install kb-index test
 install:       ## Віртуальне оточення і залежності
 	python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt

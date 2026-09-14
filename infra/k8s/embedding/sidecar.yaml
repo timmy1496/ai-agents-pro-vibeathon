@@ -1,0 +1,101 @@
+# Ембеддер KB як нативний sidecar поруч з агентом (ADR-0011).
+#
+# Контракт: агент ходить на http://localhost:8081/v1/embeddings (OpenAI-сумісний),
+# модель — nomic-embed-text-v2-moe Q8_0 через llama-server (ADR-0010). Sidecar
+# оголошений як initContainer з restartPolicy: Always (k8s >= 1.29): стартує
+# ДО основного контейнера, живе стільки ж, скільки под, і readiness пода чекає
+# на /health ембеддера — агент не отримує трафік, поки нема чим шукати.
+#
+# GGUF тягнеться на старті через -hf у emptyDir (496 МБ). Для проду — запекти в
+# образ (Dockerfile поруч) або підключити PVC: рестарт пода не має ходити в інтернет.
+#
+# Перевірено на kind: kubectl apply -f sidecar.yaml && kubectl rollout status deploy/sre-agent
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-agent
+  labels: {app: sre-agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: sre-agent}
+  template:
+    metadata:
+      labels: {app: sre-agent}
+    spec:
+      volumes:
+        - name: models
+          emptyDir: {sizeLimit: 2Gi}
+      initContainers:
+        - name: embedder
+          image: ghcr.io/ggml-org/llama.cpp:server
+          restartPolicy: Always   # робить initContainer sidecar-ом
+          args:
+            - -hf
+            - nomic-ai/nomic-embed-text-v2-moe-GGUF:Q8_0
+            - --embedding
+            - --pooling
+            - mean
+            - --ctx-size
+            - "512"        # межа моделі; чанк довший за 512 токенів сервер відхилить
+            - --ubatch-size
+            - "512"
+            - --batch-size
+            - "512"
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8081"
+          env:
+            - name: LLAMA_CACHE
+              value: /models
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          ports:
+            - {name: embed, containerPort: 8081}
+          resources:
+            requests: {cpu: "500m", memory: "768Mi"}
+            limits: {memory: "1536Mi"}
+          startupProbe:          # перший старт качає модель — даємо до 5 хв
+            httpGet: {path: /health, port: 8081}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health, port: 8081}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: 8081}
+            periodSeconds: 30
+      containers:
+        - name: agent
+          # TODO: образ агента ще не збирається (стенд запускає його з .venv, ADR-0009).
+          # Заглушка показує контракт: споживач говорить з ембеддером по localhost.
+          image: python:3.12-slim
+          command: ["python", "-c"]
+          args:
+            - |
+              import json, time, urllib.request
+              url = "http://localhost:8081/v1/embeddings"
+              while True:
+                  body = json.dumps({"input": "search_query: інциденти з OOMKilled"}).encode()
+                  req = urllib.request.Request(url, body, {"Content-Type": "application/json"})
+                  d = json.load(urllib.request.urlopen(req, timeout=30))
+                  print("embedding dims:", len(d["data"][0]["embedding"]), flush=True)
+                  time.sleep(60)
+          env:
+            - name: KB_EMBED_URL
+              value: http://localhost:8081
+          resources:
+            requests: {cpu: "100m", memory: "128Mi"}
+---
+# Опційно: той самий ембеддер як спільний сервіс для інших подів (тригер 2 в ADR-0011).
+# Порт відкриває sidecar, тому селектор — под агента.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kb-embedder
+spec:
+  selector: {app: sre-agent}
+  ports:
+    - {name: http, port: 8081, targetPort: embed}
