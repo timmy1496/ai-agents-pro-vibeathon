@@ -1,0 +1,16 @@
+# Пул ембеддера для роутера llm-d. EPP ставить helm-чарт llm-d-router-gateway;
+# failureMode: FailOpen — якщо EPP ліг, шлюз балансує сам: для ембеддингів
+# розумний вибір ендпойнта нічого не дає, тому втрачати трафік через нього не варто.
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: vllm-embed
+spec:
+  selector:
+    matchLabels: {app: vllm-embed}
+  targetPorts:
+    - number: 8000
+  endpointPickerRef:
+    name: vllm-embed-epp
+    port: {number: 9002}
+    failureMode: FailOpen

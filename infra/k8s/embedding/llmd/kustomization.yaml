@@ -1,0 +1,4 @@
+resources:
+  - vllm-embed.yaml
+  - inferencepool.yaml
+  - httproute.yaml

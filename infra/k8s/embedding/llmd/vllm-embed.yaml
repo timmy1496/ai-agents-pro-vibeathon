@@ -1,0 +1,44 @@
+# vLLM у режимі pooling: та сама модель, що в sidecar, але з HF (safetensors), не GGUF.
+# NomicBert вимагає --trust-remote-code. Один GPU на репліку; на CPU vLLM піде,
+# але llm-d розраховує CPU-профіль на 64 ядра / 64 ГБ — не для ембеддера.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-embed
+  labels: {app: vllm-embed}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: vllm-embed}
+  template:
+    metadata:
+      labels: {app: vllm-embed}
+    spec:
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.19.1
+          command: ["vllm", "serve", "nomic-ai/nomic-embed-text-v2-moe"]
+          args:
+            - --runner
+            - pooling
+            - --trust-remote-code
+            - --max-model-len
+            - "512"
+            - --port
+            - "8000"
+            - --disable-access-log-for-endpoints=/health,/metrics,/v1/models
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom: {secretKeyRef: {name: llm-d-hf-token, key: HF_TOKEN}}
+          ports:
+            - {name: http, containerPort: 8000}
+          resources:
+            requests: {cpu: "2", memory: "8Gi", nvidia.com/gpu: 1}
+            limits: {memory: "8Gi", nvidia.com/gpu: 1}
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 30
+            initialDelaySeconds: 120
